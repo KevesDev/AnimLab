@@ -1,0 +1,19 @@
+[package]
+name = "animlab-desktop"
+version = "0.1.0"
+description = "AnimLab - Animation Studio"
+authors = ["AnimLab Team"]
+edition = "2024"
+
+# The pre-compilation build scripts require the tauri-build crate
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
+
+[dependencies]
+# The core OS windowing framework
+tauri = { version = "2.0.0", features = [] }
+# Serialization frameworks for parsing the JSON configurations securely
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Native OS logging infrastructure
+log = "0.4.20"

@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "src-core",
-    # "src-tauri"  <-- Comment this out for Phase 1
+    "src-tauri"
 ]
 resolver = "2"
 

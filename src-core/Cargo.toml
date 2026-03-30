@@ -3,6 +3,7 @@ name = "animlab-core"
 version = "0.1.0"
 edition = "2024"
 description = "High-performance WebAssembly rendering core for AnimLab"
+authors = ["AnimLab Team"]
 
 # cdylib tells the compiler to create a dynamic system library (which becomes our .wasm file)
 # rlib tells it to also create a standard Rust library

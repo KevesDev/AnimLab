@@ -3,18 +3,18 @@
     "private": true,
     "version": "0.1.0",
     "engines": {
-      "node": ">=18.0.0"
+        "node": ">=18.0.0"
     },
     "workspaces": [
-      "src-ui"
+        "src-ui"
     ],
     "scripts": {
-      "dev": "npm run dev --workspace=src-ui",
-      "build:core": "cd src-core && wasm-pack build --target web --out-dir pkg",
-      "build:ui": "npm run build --workspace=src-ui",
-      "tauri": "tauri"
+        "dev": "npm run dev --workspace=src-ui",
+        "build:core": "cd src-core && wasm-pack build --target web --out-dir pkg",
+        "build:ui": "npm run build --workspace=src-ui",
+        "tauri": "tauri"
     },
     "devDependencies": {
-      "@tauri-apps/cli": "^2.0.0"
+        "@tauri-apps/cli": "^2.10.1"
     }
-  }
+}

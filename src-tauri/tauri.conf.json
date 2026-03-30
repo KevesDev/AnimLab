@@ -1,0 +1,43 @@
+{
+  "productName": "AnimLab",
+  "version": "0.1.0",
+  "identifier": "com.animlab.studio",
+  "build": {
+    "beforeDevCommand": "npm run dev --prefix ../src-ui",
+    "beforeBuildCommand": "npm run build --prefix ../src-ui",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../src-ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "AnimLab Pre-Alpha",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 768,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "GraphicsAndDesign",
+    "copyright": "AnimLab",
+    "shortDescription": "AnimLab Studio",
+    "longDescription": "High-performance node-based animation and compositing engine."
+  }
+}
