@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "identifier": "com.animlab.studio",
   "build": {
-    "beforeDevCommand": "npm run dev --prefix ../src-ui",
-    "beforeBuildCommand": "npm run build --prefix ../src-ui",
+    "beforeDevCommand": "npm run dev --prefix src-ui",
+    "beforeBuildCommand": "npm run build --prefix src-ui",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../src-ui/dist"
   },
