@@ -31,3 +31,17 @@ ehthumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# --- NODE & UI DEPENDENCIES ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# --- RUST & ENGINE DEPENDENCIES ---
+# massive file size
+target/
+# Ignore the compiled WebAssembly package output
+pkg/
+# Ignore Cargo lock files (optional, but good for libraries)
+Cargo.lock
