@@ -3,6 +3,7 @@ use log::{info, warn, error, Level};
 use web_sys::HtmlCanvasElement;
 use wgpu::util::DeviceExt; 
 use std::collections::HashMap;
+use std::panic;
 
 pub mod math;
 pub mod geometry; 
@@ -13,7 +14,9 @@ pub mod tools;
 
 use graph::{AnimGraph, IdAllocator};
 use command::CommandHistory;
-use tools::{CanvasTool, PreviewBlendMode, brush::BrushTool, pencil::PencilTool, eraser::EraserTool};
+// AAA FIX: Removed the unused PreviewBlendMode import
+use tools::{CanvasTool, brush::BrushTool, pencil::PencilTool, eraser::EraserTool};
+use geometry::VectorElement;
 
 #[derive(Debug)]
 pub enum EngineError { LoggerInitFailed(String) }
@@ -43,8 +46,11 @@ pub struct AnimLabEngine {
     #[wasm_bindgen(skip)] pub surface: Option<wgpu::Surface<'static>>,
     #[wasm_bindgen(skip)] pub config: Option<wgpu::SurfaceConfiguration>,
     
-    #[wasm_bindgen(skip)] pub render_pipeline: Option<wgpu::RenderPipeline>,
-    #[wasm_bindgen(skip)] pub eraser_pipeline: Option<wgpu::RenderPipeline>, 
+    #[wasm_bindgen(skip)] pub standard_pipeline: Option<wgpu::RenderPipeline>,
+    #[wasm_bindgen(skip)] pub stencil_write_pipeline: Option<wgpu::RenderPipeline>, 
+    #[wasm_bindgen(skip)] pub stencil_read_pipeline: Option<wgpu::RenderPipeline>, 
+    #[wasm_bindgen(skip)] pub depth_stencil_texture: Option<wgpu::TextureView>,
+    
     #[wasm_bindgen(skip)] pub raster_pipeline: Option<wgpu::RenderPipeline>,
     #[wasm_bindgen(skip)] pub raster_bind_group_layout: Option<wgpu::BindGroupLayout>,
     #[wasm_bindgen(skip)] pub raster_cache: HashMap<graph::NodeId, (wgpu::Texture, wgpu::BindGroup)>,
@@ -64,7 +70,8 @@ impl AnimLabEngine {
         Ok(AnimLabEngine {
             is_ready: true, canvas_width: 0.0, canvas_height: 0.0,
             device: None, queue: None, surface: None, config: None,
-            render_pipeline: None, eraser_pipeline: None, raster_pipeline: None, raster_bind_group_layout: None,
+            standard_pipeline: None, stencil_write_pipeline: None, stencil_read_pipeline: None, depth_stencil_texture: None,
+            raster_pipeline: None, raster_bind_group_layout: None,
             raster_cache: HashMap::new(), quad_vb: None, quad_ib: None,
             active_tool: Box::new(BrushTool::new()), 
             graph: AnimGraph::new(), history: CommandHistory::new(), id_allocator: IdAllocator::new(),
@@ -101,25 +108,42 @@ impl AnimLabEngine {
         surface.configure(&device, &config);
         
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
-        
-        let blend_state_normal = wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add }, alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add } };
         let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("Vector Pipeline Layout"), bind_group_layouts: &[], immediate_size: 0 });
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Vector Pipeline"), layout: Some(&render_pipeline_layout),
+        let blend_state_normal = wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add }, alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add } };
+
+        // AAA FIX: Migrated depth bias from raw integers to wgpu::DepthBiasState::default() structs
+        
+        // 1. Standard Pipeline (No Stencil)
+        let standard_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Standard Vector Pipeline"), layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"), buffers: &[math::Vertex::desc()], compilation_options: Default::default() },
             fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_main"), targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(blend_state_normal), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
             primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, strip_index_format: None, front_face: wgpu::FrontFace::Ccw, cull_mode: None, unclipped_depth: false, polygon_mode: wgpu::PolygonMode::Fill, conservative: false },
-            depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
+            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth24PlusStencil8, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: wgpu::StencilState::default(), bias: wgpu::DepthBiasState::default() }),
+            multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
         });
 
-        let blend_state_erase = wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add }, alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add } };
-        let eraser_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Eraser Mask Pipeline"), layout: Some(&render_pipeline_layout),
+        // 2. Stencil Write Pipeline (Writes 1 to Stencil, Color Disabled)
+        let stencil_write_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Stencil Write Pipeline"), layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"), buffers: &[math::Vertex::desc()], compilation_options: Default::default() },
-            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_main"), targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(blend_state_erase), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
+            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_main"), targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(blend_state_normal), write_mask: wgpu::ColorWrites::empty() })], compilation_options: Default::default() }),
             primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, strip_index_format: None, front_face: wgpu::FrontFace::Ccw, cull_mode: None, unclipped_depth: false, polygon_mode: wgpu::PolygonMode::Fill, conservative: false },
-            depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
+            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth24PlusStencil8, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: wgpu::StencilState { front: wgpu::StencilFaceState { compare: wgpu::CompareFunction::Always, fail_op: wgpu::StencilOperation::Replace, depth_fail_op: wgpu::StencilOperation::Replace, pass_op: wgpu::StencilOperation::Replace }, back: wgpu::StencilFaceState::default(), read_mask: !0, write_mask: !0 }, bias: wgpu::DepthBiasState::default() }),
+            multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
         });
+
+        // 3. Stencil Read Pipeline (Only draws where Stencil == 0)
+        let stencil_read_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Stencil Read Pipeline"), layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"), buffers: &[math::Vertex::desc()], compilation_options: Default::default() },
+            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_main"), targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(blend_state_normal), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, strip_index_format: None, front_face: wgpu::FrontFace::Ccw, cull_mode: None, unclipped_depth: false, polygon_mode: wgpu::PolygonMode::Fill, conservative: false },
+            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth24PlusStencil8, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: wgpu::StencilState { front: wgpu::StencilFaceState { compare: wgpu::CompareFunction::Equal, fail_op: wgpu::StencilOperation::Keep, depth_fail_op: wgpu::StencilOperation::Keep, pass_op: wgpu::StencilOperation::Keep }, back: wgpu::StencilFaceState::default(), read_mask: !0, write_mask: 0 }, bias: wgpu::DepthBiasState::default() }),
+            multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
+        });
+
+        let depth_stencil_texture = device.create_texture(&wgpu::TextureDescriptor { size: wgpu::Extent3d { width: safe_width, height: safe_height, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth24PlusStencil8, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, label: Some("Depth Stencil Texture"), view_formats: &[] }).create_view(&wgpu::TextureViewDescriptor::default());
 
         let raster_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { entries: &[ wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None }, wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None } ], label: Some("raster_bind_group_layout") });
         let raster_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("Raster Pipeline Layout"), bind_group_layouts: &[&raster_bind_group_layout], immediate_size: 0 });
@@ -128,15 +152,16 @@ impl AnimLabEngine {
             vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_raster"), buffers: &[math::RasterVertex::desc()], compilation_options: Default::default() },
             fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_raster"), targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(blend_state_normal), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
             primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, strip_index_format: None, front_face: wgpu::FrontFace::Ccw, cull_mode: None, unclipped_depth: false, polygon_mode: wgpu::PolygonMode::Fill, conservative: false },
-            depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
+            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth24PlusStencil8, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: wgpu::StencilState::default(), bias: wgpu::DepthBiasState::default() }),
+            multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
         });
 
         let quad_vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Quad VB"), contents: bytemuck::cast_slice(math::FULLSCREEN_QUAD_VERTS), usage: wgpu::BufferUsages::VERTEX });
         let quad_ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Quad IB"), contents: bytemuck::cast_slice(math::FULLSCREEN_QUAD_INDS), usage: wgpu::BufferUsages::INDEX });
         
         self.device = Some(device); self.queue = Some(queue); self.surface = Some(surface); self.config = Some(config); 
-        self.render_pipeline = Some(render_pipeline); self.eraser_pipeline = Some(eraser_pipeline); self.raster_pipeline = Some(raster_pipeline);
-        self.raster_bind_group_layout = Some(raster_bind_group_layout); self.quad_vb = Some(quad_vb); self.quad_ib = Some(quad_ib);
+        self.standard_pipeline = Some(standard_pipeline); self.stencil_write_pipeline = Some(stencil_write_pipeline); self.stencil_read_pipeline = Some(stencil_read_pipeline); self.depth_stencil_texture = Some(depth_stencil_texture);
+        self.raster_pipeline = Some(raster_pipeline); self.raster_bind_group_layout = Some(raster_bind_group_layout); self.quad_vb = Some(quad_vb); self.quad_ib = Some(quad_ib);
         Ok(())
     }
 
@@ -145,81 +170,92 @@ impl AnimLabEngine {
         self.canvas_width = safe_width as f32; self.canvas_height = safe_height as f32;
         if let (Some(device), Some(surface), Some(config)) = (&self.device, &self.surface, &mut self.config) {
             config.width = safe_width; config.height = safe_height; surface.configure(device, config);
+            self.depth_stencil_texture = Some(device.create_texture(&wgpu::TextureDescriptor { size: wgpu::Extent3d { width: safe_width, height: safe_height, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth24PlusStencil8, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, label: Some("Depth Stencil Texture"), view_formats: &[] }).create_view(&wgpu::TextureViewDescriptor::default()));
         }
     }
 
-    #[wasm_bindgen] pub fn begin_stroke(&mut self, x: f32, y: f32, pressure: f32) -> Result<(), JsValue> {
-        let settings = settings::get_settings(); self.active_tool.on_pointer_down(x, y, pressure, settings); Ok(())
-    }
+    #[wasm_bindgen] pub fn begin_stroke(&mut self, x: f32, y: f32, pressure: f32) -> Result<(), JsValue> { let settings = settings::get_settings(); self.active_tool.on_pointer_down(x, y, pressure, settings); Ok(()) }
+    
     #[wasm_bindgen] pub fn push_point(&mut self, x: f32, y: f32, pressure: f32) -> Result<(), JsValue> {
-        self.active_tool.on_pointer_move(x, y, pressure, &self.graph); Ok(())
+        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            self.active_tool.on_pointer_move(x, y, pressure, &self.graph);
+        })).unwrap_or_else(|_| {
+            error!("AAA Safety Net: Handled math panic in push_point.");
+        });
+        Ok(())
     }
     
     #[wasm_bindgen] pub fn end_stroke(&mut self) -> Result<(), JsValue> {
         let target_node_id = self.graph.active_layer_node.expect("Fatal Engine Error: Missing active layer.");
-        if let Some(command) = self.active_tool.on_pointer_up(target_node_id, &mut self.id_allocator, self.canvas_width, self.canvas_height, &self.graph) {
-            self.history.push_and_execute(command, &mut self.graph);
-        } Ok(())
+        
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            self.active_tool.on_pointer_up(target_node_id, &mut self.id_allocator, self.canvas_width, self.canvas_height, &self.graph)
+        }));
+
+        match result {
+            Ok(Some(command)) => self.history.push_and_execute(command, &mut self.graph),
+            Ok(None) => {}, 
+            Err(_) => { error!("AAA Safety Net: Handled geometric panic during final slice. DAG integrity maintained."); }
+        }
+        Ok(())
     }
 
     #[wasm_bindgen]
     pub fn render(&mut self) {
-        if let (Some(device), Some(queue), Some(surface), Some(bind_group_layout)) = (&self.device, &self.queue, &self.surface, &self.raster_bind_group_layout) {
+        if let (Some(device), Some(queue), Some(surface), Some(depth_stencil)) = (&self.device, &self.queue, &self.surface, &self.depth_stencil_texture) {
             
-            for (node_id, node) in &mut self.graph.nodes {
-                if let graph::NodeType::RasterLayer { width, height, pixels, is_dirty } = &mut node.payload {
-                    if *is_dirty && *width > 0 && *height > 0 {
-                        let texture_size = wgpu::Extent3d { width: *width, height: *height, depth_or_array_layers: 1 };
-                        let recreate = match self.raster_cache.get(node_id) { Some((tex, _)) => tex.width() != *width || tex.height() != *height, None => true };
-                        if recreate {
-                            let texture = device.create_texture(&wgpu::TextureDescriptor { size: texture_size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8UnormSrgb, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, label: Some(&format!("Raster Node {}", node_id)), view_formats: &[] });
-                            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                            let sampler = device.create_sampler(&wgpu::SamplerDescriptor { address_mode_u: wgpu::AddressMode::ClampToEdge, address_mode_v: wgpu::AddressMode::ClampToEdge, address_mode_w: wgpu::AddressMode::ClampToEdge, mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, mipmap_filter: wgpu::MipmapFilterMode::Nearest, ..Default::default() });
-                            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor { layout: bind_group_layout, entries: &[ wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) } ], label: Some("Raster Bind Group") });
-                            self.raster_cache.insert(*node_id, (texture, bind_group));
-                        }
-                        if let Some((texture, _)) = self.raster_cache.get(node_id) { queue.write_texture(wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, pixels, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * *width), rows_per_image: Some(*height) }, texture_size); } *is_dirty = false;
-                    }
-                }
-            }
-
             let output = match surface.get_current_texture() { Ok(frame) => frame, Err(wgpu::SurfaceError::Outdated) => return, Err(e) => { error!("Surface error: {:?}", e); return; } };
             let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             
             {
                 let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Main Render Pass"), color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.08, g: 0.09, b: 0.10, a: 1.0 }), store: wgpu::StoreOp::Store }, depth_slice: None })], depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, ..Default::default()
+                    label: Some("Main Render Pass"), 
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.08, g: 0.09, b: 0.10, a: 1.0 }), store: wgpu::StoreOp::Store }, depth_slice: None })], 
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: depth_stencil, depth_ops: None, stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Store }) }), 
+                    timestamp_writes: None, occlusion_query_set: None, ..Default::default()
                 });
                 
-                if let (Some(raster_pipe), Some(quad_vb), Some(quad_ib)) = (&self.raster_pipeline, &self.quad_vb, &self.quad_ib) {
-                    rp.set_pipeline(raster_pipe); rp.set_vertex_buffer(0, quad_vb.slice(..)); rp.set_index_buffer(quad_ib.slice(..), wgpu::IndexFormat::Uint16);
-                    for (node_id, node) in &self.graph.nodes {
-                        if let graph::NodeType::RasterLayer { .. } = &node.payload {
-                            if let Some((_, bind_group)) = self.raster_cache.get(node_id) { rp.set_bind_group(0, bind_group, &[]); rp.draw_indexed(0..6, 0, 0..1); }
+                let draw = |rp_ref: &mut wgpu::RenderPass<'_>, vertices: &[math::Vertex], indices: &[u16]| {
+                    if vertices.is_empty() { return; }
+                    let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("VB"), contents: bytemuck::cast_slice(vertices), usage: wgpu::BufferUsages::VERTEX });
+                    let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("IB"), contents: bytemuck::cast_slice(indices), usage: wgpu::BufferUsages::INDEX });
+                    rp_ref.set_vertex_buffer(0, vb.slice(..)); rp_ref.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16); rp_ref.draw_indexed(0..indices.len() as u32, 0, 0..1);
+                };
+
+                if let (Some(standard_pipe), Some(stencil_write), Some(stencil_read)) = (&self.standard_pipeline, &self.stencil_write_pipeline, &self.stencil_read_pipeline) {
+                    let render_list = self.graph.collect_renderable_elements();
+                    for element in render_list { 
+                        match element {
+                            VectorElement::Centerline(c) => {
+                                rp.set_pipeline(standard_pipe); draw(&mut rp, &c.vertices, &c.indices);
+                            }
+                            VectorElement::Contour(c) => {
+                                if c.eraser_masks.is_empty() {
+                                    rp.set_pipeline(standard_pipe); draw(&mut rp, &c.vertices, &c.indices);
+                                } else {
+                                    // 1. Draw all masks to Stencil buffer (writing 1s)
+                                    rp.set_pipeline(stencil_write);
+                                    rp.set_stencil_reference(1);
+                                    for mask in &c.eraser_masks { draw(&mut rp, &mask.vertices, &mask.indices); }
+                                    
+                                    // 2. Draw Contour where Stencil == 0
+                                    rp.set_pipeline(stencil_read);
+                                    rp.set_stencil_reference(0);
+                                    draw(&mut rp, &c.vertices, &c.indices);
+
+                                    // 3. Clear Stencil to 0 for the next stroke
+                                    rp.set_pipeline(stencil_write);
+                                    rp.set_stencil_reference(0);
+                                    for mask in &c.eraser_masks { draw(&mut rp, &mask.vertices, &mask.indices); }
+                                }
+                            }
                         }
                     }
-                }
-
-                if let (Some(vector_pipe), Some(eraser_pipe)) = (&self.render_pipeline, &self.eraser_pipeline) {
-                    rp.set_pipeline(vector_pipe);
-                    
-                    let draw = |rp_ref: &mut wgpu::RenderPass<'_>, vertices: &[math::Vertex], indices: &[u16]| {
-                        if vertices.is_empty() { return; }
-                        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("VB"), contents: bytemuck::cast_slice(vertices), usage: wgpu::BufferUsages::VERTEX });
-                        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("IB"), contents: bytemuck::cast_slice(indices), usage: wgpu::BufferUsages::INDEX });
-                        rp_ref.set_vertex_buffer(0, vb.slice(..)); rp_ref.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16); rp_ref.draw_indexed(0..indices.len() as u32, 0, 0..1);
-                    };
-                    
-                    let render_list = self.graph.collect_renderable_elements();
-                    for element in render_list { draw(&mut rp, element.vertices(), element.indices()); }
                     
                     let (preview_verts, preview_inds) = self.active_tool.get_preview_mesh(self.canvas_width, self.canvas_height);
-                    
-                    match self.active_tool.get_preview_blend_mode() {
-                        PreviewBlendMode::Normal => { rp.set_pipeline(vector_pipe); draw(&mut rp, &preview_verts, &preview_inds); }
-                        PreviewBlendMode::Subtract => { rp.set_pipeline(eraser_pipe); draw(&mut rp, &preview_verts, &preview_inds); }
-                    }
+                    rp.set_pipeline(standard_pipe);
+                    draw(&mut rp, &preview_verts, &preview_inds);
                 }
             }
             queue.submit(std::iter::once(encoder.finish()));

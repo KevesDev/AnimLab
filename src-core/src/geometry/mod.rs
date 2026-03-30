@@ -28,6 +28,13 @@ pub struct CenterlineStroke {
     pub aabb: AABB,
 }
 
+// AAA ARCHITECTURE: Hardware Masking Array
+#[derive(Debug, Clone)]
+pub struct EraserMask {
+    pub vertices: Vec<Vertex>,
+    pub indices: Vec<u16>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ContourStroke {
     pub shape: MultiPolygon<f32>, 
@@ -35,6 +42,7 @@ pub struct ContourStroke {
     pub vertices: Vec<Vertex>, 
     pub indices: Vec<u16>,
     pub aabb: AABB,
+    pub eraser_masks: Vec<EraserMask>, // Stores non-destructive cuts for the GPU
 }
 
 #[derive(Debug, Clone)]
@@ -50,14 +58,12 @@ impl VectorElement {
             VectorElement::Contour(s) => &s.aabb,
         }
     }
-
     pub fn vertices(&self) -> &[Vertex] {
         match self {
             VectorElement::Centerline(s) => &s.vertices,
             VectorElement::Contour(s) => &s.vertices,
         }
     }
-
     pub fn indices(&self) -> &[u16] {
         match self {
             VectorElement::Centerline(s) => &s.indices,

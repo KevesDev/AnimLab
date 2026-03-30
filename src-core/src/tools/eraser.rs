@@ -28,20 +28,23 @@ impl CanvasTool for EraserTool {
             if self.raw_points.len() < 2 { return None; }
 
             let smoothed = smooth_spline(&self.raw_points, settings.smoothing_level);
-            let eraser_sweep = BooleanSlicer::build_eraser_sweep(&smoothed, settings.brush_thickness);
-
+            
             let mut sweep_aabb = AABB::empty();
             let max_r = settings.brush_thickness / 2.0;
             for pt in &smoothed { sweep_aabb.expand_to_include(pt.x, pt.y, max_r); }
 
-            let overlapping_ids = graph.query_spatial_grid_ids(active_node_id, &sweep_aabb);
+            let mut overlapping_ids = std::collections::HashSet::new();
+            overlapping_ids.extend(graph.query_spatial_grid_ids(active_node_id, &sweep_aabb));
+            
             let mut batch_commands = Vec::new();
 
             if let crate::graph::NodeType::VectorLayer { elements, .. } = &graph.nodes.get(&active_node_id).unwrap().payload {
                 for stroke_id in overlapping_ids {
                     if let Some(original_element) = elements.get(&stroke_id) {
                         
-                        let new_fragments = BooleanSlicer::slice_element(original_element, &eraser_sweep, canvas_width, canvas_height);
+                        let new_fragments = BooleanSlicer::slice_element(
+                            original_element, &self.raw_points, settings.brush_thickness, canvas_width, canvas_height, settings.smoothing_level
+                        );
                         
                         let mut new_fragments_with_ids = Vec::new();
                         for frag in new_fragments { new_fragments_with_ids.push((id_allocator.generate(), frag)); }
@@ -62,13 +65,11 @@ impl CanvasTool for EraserTool {
     fn get_preview_mesh(&self, canvas_width: f32, canvas_height: f32) -> (Vec<Vertex>, Vec<u16>) {
         if let Some(settings) = &self.settings_snapshot {
             if self.raw_points.len() < 2 { return (Vec::new(), Vec::new()); }
-            
             let smoothed = smooth_spline(&self.raw_points, settings.smoothing_level);
-            // AAA FIX: Unpacks the 4-tuple correctly
-            let (_, verts, inds, _) = Extruder::extrude_contour(&smoothed, settings.brush_thickness, [1.0, 1.0, 1.0, 1.0], canvas_width, canvas_height);
+            let (verts, inds, _) = Extruder::extrude_centerline(&smoothed, settings.brush_thickness, [0.08, 0.09, 0.10, 1.0], canvas_width, canvas_height);
             (verts, inds)
         } else { (Vec::new(), Vec::new()) }
     }
 
-    fn get_preview_blend_mode(&self) -> PreviewBlendMode { PreviewBlendMode::Subtract }
+    fn get_preview_blend_mode(&self) -> PreviewBlendMode { PreviewBlendMode::Normal }
 }

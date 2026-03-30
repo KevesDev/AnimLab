@@ -1,67 +1,63 @@
-use super::{Point, VectorElement, CenterlineStroke, ContourStroke};
+use super::{Point, VectorElement, CenterlineStroke, ContourStroke, EraserMask};
 use crate::geometry::tessellator::Extruder;
-use geo::{Polygon, MultiPolygon, LineString, Coord, BooleanOps, Contains};
+use crate::geometry::spline::smooth_spline;
 
 pub struct BooleanSlicer;
 
 impl BooleanSlicer {
-    /// Unions every frame of the eraser path into one solid shape to prevent trailing artifacts.
-    pub fn build_eraser_sweep(points: &[Point], base_thickness: f32) -> MultiPolygon<f32> {
-        let mut total_sweep = MultiPolygon::new(vec![]);
-        if points.is_empty() { return total_sweep; }
-        
-        let create_circle = |x: f32, y: f32, r: f32| -> Polygon<f32> {
-            let steps = 12; let mut coords = Vec::with_capacity(steps + 1);
-            for i in 0..=steps {
-                let angle = (i as f32 / steps as f32) * std::f32::consts::TAU;
-                coords.push(Coord { x: x + angle.cos() * r, y: y + angle.sin() * r });
-            }
-            Polygon::new(LineString::new(coords), vec![])
-        };
-
-        let r_start = (base_thickness * points[0].pressure) / 2.0;
-        total_sweep = total_sweep.union(&create_circle(points[0].x, points[0].y, r_start));
-
-        for i in 1..points.len() {
-            let p1 = &points[i-1]; let p2 = &points[i];
-            let r1 = (base_thickness * p1.pressure) / 2.0;
-            let r2 = (base_thickness * p2.pressure) / 2.0;
-            let dx = p2.x - p1.x; let dy = p2.y - p1.y;
-            let length = (dx * dx + dy * dy).sqrt();
-            
-            if length > 0.01 {
-                let nx = -dy / length; let ny = dx / length;
-                let poly = Polygon::new(LineString::new(vec![
-                    Coord { x: p1.x + nx * r1, y: p1.y + ny * r1 },
-                    Coord { x: p2.x + nx * r2, y: p2.y + ny * r2 },
-                    Coord { x: p2.x - nx * r2, y: p2.y - ny * r2 },
-                    Coord { x: p1.x - nx * r1, y: p1.y - ny * r1 },
-                    Coord { x: p1.x + nx * r1, y: p1.y + ny * r1 },
-                ]), vec![]);
-                total_sweep = total_sweep.union(&poly);
-            }
-            total_sweep = total_sweep.union(&create_circle(p2.x, p2.y, r2));
+    fn is_point_in_capsule(test_point: &Point, p1: &Point, p2: &Point, radius: f32) -> bool {
+        let dx = p2.x - p1.x; let dy = p2.y - p1.y;
+        let length_sq = dx * dx + dy * dy;
+        if length_sq < 0.0001 {
+            let dist_sq = (test_point.x - p1.x).powi(2) + (test_point.y - p1.y).powi(2);
+            return dist_sq <= radius * radius;
         }
-        total_sweep
+        let t = ((test_point.x - p1.x) * dx + (test_point.y - p1.y) * dy) / length_sq;
+        let t = t.clamp(0.0, 1.0);
+        let closest_x = p1.x + t * dx; let closest_y = p1.y + t * dy;
+        let dist_sq = (test_point.x - closest_x).powi(2) + (test_point.y - closest_y).powi(2);
+        dist_sq <= radius * radius
+    }
+
+    fn is_point_in_sweep(pt: &Point, sweep_points: &[Point], base_thickness: f32) -> bool {
+        for i in 0..sweep_points.len() {
+            let r = (base_thickness * sweep_points[i].pressure) / 2.0;
+            if (pt.x - sweep_points[i].x).powi(2) + (pt.y - sweep_points[i].y).powi(2) <= r * r { return true; }
+            if i > 0 {
+                let p1 = &sweep_points[i-1];
+                if Self::is_point_in_capsule(pt, p1, &sweep_points[i], r) { return true; }
+            }
+        }
+        false
     }
 
     pub fn slice_element(
-        element: &VectorElement, eraser_sweep: &MultiPolygon<f32>, canvas_width: f32, canvas_height: f32
+        element: &VectorElement, raw_sweep: &[Point], base_thickness: f32, canvas_width: f32, canvas_height: f32, smoothing: f32
     ) -> Vec<VectorElement> {
         match element {
             VectorElement::Contour(contour) => {
-                // Execute a single, unified Boolean Subtraction (Martinez-Rueda)
-                let clipped_multipoly = contour.shape.difference(eraser_sweep);
-                if clipped_multipoly.0.is_empty() { return Vec::new(); }
-
-                let (vertices, indices, aabb) = Extruder::tessellate_multipolygon(
-                    &clipped_multipoly, contour.color, canvas_width, canvas_height
+                // AAA ARCHITECTURE: Stencil Masking
+                // We do NOT perform heavy CPU math. We generate a fast triangle mesh of the eraser stroke 
+                // and attach it to the contour. The WebGPU pipeline handles the visual subtraction.
+                let smoothed_eraser = smooth_spline(raw_sweep, smoothing);
+                let (_, vertices, indices, _) = Extruder::extrude_contour(
+                    &smoothed_eraser, base_thickness, [1.0, 1.0, 1.0, 1.0], canvas_width, canvas_height
                 );
+                
+                let mut new_masks = contour.eraser_masks.clone();
+                new_masks.push(EraserMask { vertices, indices });
 
-                vec![VectorElement::Contour(ContourStroke { shape: clipped_multipoly, color: contour.color, vertices, indices, aabb })]
+                vec![VectorElement::Contour(ContourStroke {
+                    shape: contour.shape.clone(),
+                    color: contour.color,
+                    vertices: contour.vertices.clone(),
+                    indices: contour.indices.clone(),
+                    aabb: contour.aabb,
+                    eraser_masks: new_masks,
+                })]
             },
             VectorElement::Centerline(centerline) => {
-                // Densely resample the centerline (1 pt every 2px) to prevent "Large Chunk" erasing
+                // Centerlines are 1D arrays, so O(N) distance checks are safe and blistering fast on the CPU.
                 let mut dense_points = Vec::new();
                 if !centerline.points.is_empty() {
                     dense_points.push(centerline.points[0]);
@@ -80,8 +76,7 @@ impl BooleanSlicer {
                 let mut current_fragment = Vec::new();
 
                 for pt in &dense_points {
-                    // Test if the resampled point falls inside the eraser's sweep shape
-                    if eraser_sweep.contains(&geo::Point::new(pt.x, pt.y)) {
+                    if Self::is_point_in_sweep(pt, raw_sweep, base_thickness) {
                         if current_fragment.len() >= 2 { fragments.push(current_fragment.clone()); }
                         current_fragment.clear();
                     } else { current_fragment.push(*pt); }
@@ -90,7 +85,6 @@ impl BooleanSlicer {
 
                 let mut new_elements = Vec::new();
                 for frag in fragments {
-                    // Simplify the remaining geometry to remove unnecessary dense points and save GPU RAM
                     let mut simplified = vec![frag[0]];
                     for i in 1..frag.len()-1 {
                         let p1 = simplified.last().unwrap(); let p2 = &frag[i];
@@ -99,9 +93,7 @@ impl BooleanSlicer {
                     simplified.push(*frag.last().unwrap());
 
                     let (vertices, indices, aabb) = Extruder::extrude_centerline(&simplified, centerline.thickness, centerline.color, canvas_width, canvas_height);
-                    new_elements.push(VectorElement::Centerline(CenterlineStroke {
-                        points: simplified, thickness: centerline.thickness, color: centerline.color, vertices, indices, aabb
-                    }));
+                    new_elements.push(VectorElement::Centerline(CenterlineStroke { points: simplified, thickness: centerline.thickness, color: centerline.color, vertices, indices, aabb }));
                 }
                 new_elements
             }

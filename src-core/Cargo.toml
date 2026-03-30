@@ -18,9 +18,7 @@ wasm-bindgen-futures = "0.4.42"
 bytemuck = { version = "1.15", features = ["derive"] }
 lazy_static = "1.4.0"
 
-# AAA: Pure-Rust Computational Geometry Pipeline
 geo = "0.23"
-geo-booleanop = "0.3"
 lyon_tessellation = "1.0"
 
 [dependencies.web-sys]
