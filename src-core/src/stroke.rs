@@ -1,5 +1,5 @@
 use log::warn;
-use crate::math::{Vertex, Tessellator};
+use crate::math::{Vertex, Tessellator, AABB};
 use crate::settings; 
 
 #[derive(Debug, Clone, Copy)]
@@ -15,11 +15,13 @@ impl Point {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Stroke {
     pub points: Vec<Point>,
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u16>,
+    // AAA: The bounding box required for spatial collision
+    pub aabb: AABB,
 }
 
 impl Stroke {
@@ -28,6 +30,7 @@ impl Stroke {
             points: Vec::with_capacity(256),
             vertices: Vec::new(),
             indices: Vec::new(),
+            aabb: AABB::empty(),
         }
     }
 
@@ -40,14 +43,18 @@ impl Stroke {
         }
     }
 
-    /// Compiles the raw mathematical points into a renderable GPU mesh.
     pub fn build_mesh(&mut self, canvas_width: f32, canvas_height: f32) {
         let current_settings = settings::get_settings();
-        
-        // Execute the Catmull-Rom algorithm to inject curvature data between raw hardware frames
         let smoothed_points = crate::math::smooth_points(&self.points, current_settings.smoothing_level);
         
-        // Pass the dynamically smoothed point array to the GPU memory architect
+        // Calculate the Spatial Footprint (AABB) of this specific stroke
+        let mut bounds = AABB::empty();
+        let max_radius = current_settings.brush_thickness / 2.0; 
+        for pt in &smoothed_points {
+            bounds.expand_to_include(pt.x, pt.y, max_radius);
+        }
+        self.aabb = bounds;
+
         let (verts, inds) = Tessellator::extrude_stroke(
             &smoothed_points, 
             current_settings.brush_thickness, 
@@ -55,7 +62,6 @@ impl Stroke {
             canvas_width, 
             canvas_height
         );
-        
         self.vertices = verts;
         self.indices = inds;
     }

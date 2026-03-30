@@ -1,24 +1,32 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use log::{info, warn};
 use crate::stroke::Stroke;
+use crate::math::AABB;
 
-/// Unique identifier for every node in the graph.
 pub type NodeId = u64;
+pub type StrokeId = u64;
 
-/// Defines the specific behavior and memory payload of a Node.
+const CHUNK_SIZE: f32 = 128.0;
+
 #[derive(Debug)]
 pub enum NodeType {
-    /// Holds raw mathematical vector artwork. Equivalent to a "Layer".
-    Drawing { strokes: Vec<Stroke> },
+    // AAA BIFURCATION: Mathematical Vector Data (Infinite Scaling)
+    VectorLayer { 
+        strokes: HashMap<StrokeId, Stroke>,
+        spatial_grid: HashMap<(i32, i32), HashSet<StrokeId>>,
+    },
     
-    /// Mathematically combines multiple input nodes into a single image.
+    // AAA BIFURCATION: Raw Pixel Data (Hardware Agnostic CPU Buffer)
+    RasterLayer {
+        width: u32,
+        height: u32,
+        pixels: Vec<u8>, // RGBA 8-bit channel format
+    },
+    
     Composite,
-    
-    /// The final destination of the render pipeline. What the user actually sees.
     Output,
 }
 
-/// A singular block of the Directed Acyclic Graph.
 #[derive(Debug)]
 pub struct AnimNode {
     pub id: NodeId,
@@ -26,16 +34,14 @@ pub struct AnimNode {
     pub payload: NodeType,
 }
 
-/// The master Directed Acyclic Graph (DAG) that runs the entire animation engine.
 #[derive(Debug)]
 pub struct AnimGraph {
     pub nodes: HashMap<NodeId, AnimNode>,
-    /// Defines the cables connecting nodes. Format: (Output_Pin_Of_Node_A, Input_Pin_Of_Node_B)
     pub edges: Vec<(NodeId, NodeId)>,
     next_id: NodeId,
     
-    /// Tracks which node the user is currently drawing on.
-    pub active_drawing_node: Option<NodeId>,
+    // Points to the layer the user currently has selected in the UI
+    pub active_layer_node: Option<NodeId>,
 }
 
 impl AnimGraph {
@@ -43,72 +49,124 @@ impl AnimGraph {
         let mut graph = Self {
             nodes: HashMap::new(),
             edges: Vec::new(),
-            next_id: 1, // Start IDs at 1, reserving 0 as a potential null-pointer
-            active_drawing_node: None,
+            next_id: 1, 
+            active_layer_node: None,
         };
 
-        // --- AAA ENGINE INITIALIZATION ---
-        // A node-based engine must always have a Master Output, and at least 
-        // one Drawing Node connected to it so the user can immediately start working.
-        
         let output_id = graph.add_node("Master Output".to_string(), NodeType::Output);
         
-        let initial_drawing_id = graph.add_node("Drawing 1".to_string(), NodeType::Drawing { strokes: Vec::new() });
-        graph.active_drawing_node = Some(initial_drawing_id);
+        // The engine boots with a default Vector Layer to receive the brush strokes
+        let initial_vector_id = graph.add_node("Vector Layer 1".to_string(), NodeType::VectorLayer { 
+            strokes: HashMap::new(),
+            spatial_grid: HashMap::new(),
+        });
+        
+        graph.active_layer_node = Some(initial_vector_id);
+        graph.connect_nodes(initial_vector_id, output_id);
 
-        // Connect the Drawing Node to the Master Output
-        graph.connect_nodes(initial_drawing_id, output_id);
-
-        info!("AnimGraph Initialized: Master Output [{}] connected to [{}]", output_id, initial_drawing_id);
-
+        info!("AnimGraph Initialized: DAG Bifurcation Online (Vector & Raster Ready).");
         graph
     }
 
-    /// Safely generates a new node and registers it in the memory map.
     pub fn add_node(&mut self, name: String, payload: NodeType) -> NodeId {
         let id = self.next_id;
         self.next_id += 1;
-
         let node = AnimNode { id, name, payload };
         self.nodes.insert(id, node);
         id
     }
 
-    /// Creates a directional data flow from one node to another.
     pub fn connect_nodes(&mut self, source_id: NodeId, target_id: NodeId) {
         if self.nodes.contains_key(&source_id) && self.nodes.contains_key(&target_id) {
             self.edges.push((source_id, target_id));
-        } else {
-            warn!("Engine attempted to connect invalid node IDs: {} -> {}", source_id, target_id);
         }
     }
 
-    /// Injects a completed brush stroke into the currently active drawing node.
-    pub fn inject_stroke(&mut self, stroke: Stroke) {
-        if let Some(active_id) = self.active_drawing_node {
-            if let Some(node) = self.nodes.get_mut(&active_id) {
-                if let NodeType::Drawing { ref mut strokes } = node.payload {
-                    strokes.push(stroke);
-                    return;
+    fn get_chunks_for_aabb(aabb: &AABB) -> Vec<(i32, i32)> {
+        let start_x = (aabb.min_x / CHUNK_SIZE).floor() as i32;
+        let end_x = (aabb.max_x / CHUNK_SIZE).floor() as i32;
+        let start_y = (aabb.min_y / CHUNK_SIZE).floor() as i32;
+        let end_y = (aabb.max_y / CHUNK_SIZE).floor() as i32;
+
+        let mut chunks = Vec::new();
+        for x in start_x..=end_x {
+            for y in start_y..=end_y {
+                chunks.push((x, y));
+            }
+        }
+        chunks
+    }
+
+    pub fn insert_stroke_by_id(&mut self, node_id: NodeId, stroke_id: StrokeId, stroke: Stroke) {
+        if let Some(node) = self.nodes.get_mut(&node_id) {
+            // Strictly enforce that math can only be injected into Vector Layers
+            if let NodeType::VectorLayer { strokes, spatial_grid } = &mut node.payload {
+                let chunks = Self::get_chunks_for_aabb(&stroke.aabb);
+                for chunk in chunks {
+                    spatial_grid.entry(chunk).or_insert_with(HashSet::new).insert(stroke_id);
+                }
+                strokes.insert(stroke_id, stroke);
+                return;
+            } else {
+                warn!("Engine Collision: Attempted to inject Vector Math into a Raster/Composite Node [{}].", node_id);
+                return;
+            }
+        }
+    }
+
+    pub fn remove_stroke_by_id(&mut self, node_id: NodeId, stroke_id: StrokeId) {
+        if let Some(node) = self.nodes.get_mut(&node_id) {
+            if let NodeType::VectorLayer { strokes, spatial_grid } = &mut node.payload {
+                if let Some(stroke) = strokes.get(&stroke_id) {
+                    let chunks = Self::get_chunks_for_aabb(&stroke.aabb);
+                    for chunk in chunks {
+                        if let Some(cell) = spatial_grid.get_mut(&chunk) {
+                            cell.remove(&stroke_id);
+                            if cell.is_empty() { spatial_grid.remove(&chunk); } 
+                        }
+                    }
+                }
+                strokes.remove(&stroke_id);
+                return;
+            }
+        }
+    }
+
+    pub fn query_spatial_grid(&self, node_id: NodeId, target_aabb: &AABB) -> Vec<&Stroke> {
+        let mut found_strokes = Vec::new();
+        let mut checked_ids = HashSet::new(); 
+
+        if let Some(node) = self.nodes.get(&node_id) {
+            if let NodeType::VectorLayer { strokes, spatial_grid } = &node.payload {
+                let chunks_to_check = Self::get_chunks_for_aabb(target_aabb);
+                
+                for chunk in chunks_to_check {
+                    if let Some(stroke_ids_in_chunk) = spatial_grid.get(&chunk) {
+                        for id in stroke_ids_in_chunk {
+                            if checked_ids.insert(*id) { 
+                                if let Some(stroke) = strokes.get(id) {
+                                    if stroke.aabb.intersects(target_aabb) {
+                                        found_strokes.push(stroke);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
-        warn!("Engine Input Dropped: No active drawing node found in the graph.");
+        found_strokes
     }
 
-    /// Extracts all strokes from the graph for the render loop.
-    /// In the future, this will traverse the graph hierarchically.
     pub fn collect_renderable_strokes(&self) -> Vec<&Stroke> {
         let mut render_list = Vec::new();
-        
         for node in self.nodes.values() {
-            if let NodeType::Drawing { strokes } = &node.payload {
-                for stroke in strokes {
+            if let NodeType::VectorLayer { strokes, .. } = &node.payload {
+                for stroke in strokes.values() {
                     render_list.push(stroke);
                 }
             }
         }
-        
         render_list
     }
 }

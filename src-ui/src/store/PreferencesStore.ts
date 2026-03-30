@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { InputAction } from './shortcutStore';
 
 export interface BrushPreferences {
     thickness: number;
@@ -9,6 +10,7 @@ export interface BrushPreferences {
 interface PreferencesState {
     // Global User Preferences
     brush: BrushPreferences;
+    activeTool: InputAction;
     
     // The active memory pointer to the Rust WASM Engine
     engineInstance: any | null;
@@ -16,6 +18,7 @@ interface PreferencesState {
     // Actions
     setBrushThickness: (thickness: number) => void;
     setBrushColor: (r: number, g: number, b: number, a: number) => void;
+    setActiveTool: (tool: InputAction) => void;
     setEngineInstance: (engine: any) => void;
     
     // Pushes the current React state across the WASM bridge into Rust memory
@@ -28,6 +31,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
         color: [0.9, 0.9, 0.9, 1.0],
         smoothing: 0.5,
     },
+    activeTool: InputAction.ToolBrush,
     engineInstance: null,
 
     setBrushThickness: (thickness) => {
@@ -40,9 +44,13 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
         get().syncPreferencesToEngine();
     },
 
+    setActiveTool: (tool) => {
+        set({ activeTool: tool });
+        // Future: This is where we will call engine.set_active_tool(tool) in Rust
+    },
+
     setEngineInstance: (engineInstance) => {
         set({ engineInstance });
-        // Immediately sync the default preferences into Rust the moment the engine boots
         get().syncPreferencesToEngine();
     },
 

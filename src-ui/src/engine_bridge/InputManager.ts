@@ -1,90 +1,134 @@
-import { AnimLabEngine } from 'animlab-core';
+import { useShortcutStore, InputAction } from '../store/shortcutStore';
+import { usePreferencesStore } from '../store/preferencesStore';
 
-/// <summary>
-/// A pure TypeScript class that acts as the Single Source of Truth for all canvas interactions.
-/// It intercepts PointerEvents, manages pointer capture locks, and pipes data directly to the Rust engine.
-/// </summary>
 export class GlobalInputManager {
-    private canvas: HTMLCanvasElement;
-    private engine: AnimLabEngine;
-    private isDrawing: boolean = false;
+    private static instance: GlobalInputManager;
+    private isInitialized = false;
 
-    constructor(canvas: HTMLCanvasElement, engine: AnimLabEngine) {
-        this.canvas = canvas;
-        this.engine = engine;
+    private constructor() {}
 
-        // Bind the event listeners to the class instance
-        this.handlePointerDown = this.handlePointerDown.bind(this);
-        this.handlePointerMove = this.handlePointerMove.bind(this);
-        this.handlePointerUp = this.handlePointerUp.bind(this);
-
-        // Attach listeners directly to the physical WebGPU canvas
-        // We use 'pointer' events instead of 'mouse' events because pointer natively handles 
-        // Wacom tablets, Apple Pencils, and standard mice all through one unified API.
-        this.canvas.addEventListener('pointerdown', this.handlePointerDown);
-        this.canvas.addEventListener('pointermove', this.handlePointerMove);
-        this.canvas.addEventListener('pointerup', this.handlePointerUp);
-        this.canvas.addEventListener('pointercancel', this.handlePointerUp); // Handles window losing focus securely
-        this.canvas.addEventListener('pointerout', this.handlePointerUp);
+    public static getInstance(): GlobalInputManager {
+        if (!GlobalInputManager.instance) {
+            GlobalInputManager.instance = new GlobalInputManager();
+        }
+        return GlobalInputManager.instance;
     }
 
-    private handlePointerDown(e: PointerEvent): void {
-        // Only accept primary button inputs (Left Click or Pen Tip)
-        if (e.button !== 0) return;
-
+    public initialize() {
+        if (this.isInitialized) return;
         try {
-            this.isDrawing = true;
-            
-            // Lock the pointer to the canvas. This guarantees we keep receiving coordinates
-            // even if the user drags their pen wildly outside the application window.
-            this.canvas.setPointerCapture(e.pointerId);
-
-            // Coerce the pressure value. Standard mice do not report pressure, so we default to 1.0 (max).
-            const pressure = e.pressure !== 0 ? e.pressure : 1.0;
-            
-            this.engine.begin_stroke(e.offsetX, e.offsetY, pressure);
+            window.addEventListener('keydown', this.handleKeyDown);
+            window.addEventListener('contextmenu', this.preventContextMenu); 
+            this.isInitialized = true;
+            console.info("[InputManager] Core Event Listeners securely mounted.");
         } catch (error) {
-            console.error("[InputManager] Fatal error initiating stroke pipeline:", error);
-            this.isDrawing = false; // Failsafe state reset
+            console.error("[InputManager] FATAL: Failed to mount input listeners.", error);
         }
     }
 
-    private handlePointerMove(e: PointerEvent): void {
-        if (!this.isDrawing) return;
-
+    public cleanup() {
+        if (!this.isInitialized) return;
         try {
-            const pressure = e.pressure !== 0 ? e.pressure : 1.0;
-            // Coalesced events (multiple hardware ticks per browser frame) can be added here later for extreme precision
-            this.engine.push_point(e.offsetX, e.offsetY, pressure);
+            window.removeEventListener('keydown', this.handleKeyDown);
+            window.removeEventListener('contextmenu', this.preventContextMenu);
+            this.isInitialized = false;
+            console.info("[InputManager] Core Event Listeners safely unmounted.");
         } catch (error) {
-            console.error("[InputManager] Fatal error piping point data to Engine:", error);
-            this.isDrawing = false;
+            console.error("[InputManager] ERROR: Memory leak risk. Failed to unmount listeners.", error);
         }
     }
 
-    private handlePointerUp(e: PointerEvent): void {
-        if (!this.isDrawing) return;
+    private preventContextMenu = (e: MouseEvent) => {
+        e.preventDefault();
+    };
+
+    private handleKeyDown = (e: KeyboardEvent) => {
+        try {
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+                return;
+            }
+
+            const chordParts: string[] = [];
+            if (e.ctrlKey) chordParts.push('Control');
+            if (e.metaKey) chordParts.push('Meta');
+            if (e.altKey) chordParts.push('Alt');
+            if (e.shiftKey) chordParts.push('Shift');
+            
+            if (!['ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight'].includes(e.code)) {
+                chordParts.push(e.code); 
+            } else {
+                return; 
+            }
+
+            const chord = chordParts.join('+');
+            const action = useShortcutStore.getState().keyMap[chord];
+
+            if (action) {
+                e.preventDefault(); 
+                this.dispatchAction(action);
+            }
+        } catch (error) {
+            console.error(`[InputManager] Pipeline crashed while parsing hardware event: ${e.code}`, error);
+        }
+    };
+
+    private dispatchAction(action: InputAction) {
+        const prefs = usePreferencesStore.getState();
+        const engine = prefs.engineInstance;
 
         try {
-            this.isDrawing = false;
-            
-            // Release the hardware lock securely
-            this.canvas.releasePointerCapture(e.pointerId);
-            
-            this.engine.end_stroke();
-        } catch (error) {
-            console.error("[InputManager] Fatal error terminating stroke pipeline:", error);
-        }
-    }
+            switch (action) {
+                case InputAction.Undo:
+                    console.info("[InputManager] Dispatching Semantic Action: Undo");
+                    // AAA FIX: Route Semantic UI action to the compiled Rust History API
+                    if (engine) engine.trigger_undo();
+                    break;
+                case InputAction.Redo:
+                    console.info("[InputManager] Dispatching Semantic Action: Redo");
+                    if (engine) engine.trigger_redo();
+                    break;
+                    
+                case InputAction.DecreaseBrushSize:
+                    prefs.setBrushThickness(Math.max(1.0, prefs.brush.thickness - 1.0));
+                    break;
+                case InputAction.IncreaseBrushSize:
+                    prefs.setBrushThickness(Math.min(100.0, prefs.brush.thickness + 1.0));
+                    break;
 
-    /// <summary>
-    /// ZERO-DEBT RULE: Always sever DOM listeners when the module is destroyed to prevent memory leaks.
-    /// </summary>
-    public dispose(): void {
-        this.canvas.removeEventListener('pointerdown', this.handlePointerDown);
-        this.canvas.removeEventListener('pointermove', this.handlePointerMove);
-        this.canvas.removeEventListener('pointerup', this.handlePointerUp);
-        this.canvas.removeEventListener('pointercancel', this.handlePointerUp);
-        this.canvas.removeEventListener('pointerout', this.handlePointerUp);
+                case InputAction.ToolBrush:
+                case InputAction.ToolPencil:
+                case InputAction.ToolEraser:
+                case InputAction.ToolSelect:
+                case InputAction.ToolCutter:
+                case InputAction.ToolContourEditor:
+                case InputAction.ToolCenterlineEditor:
+                case InputAction.ToolPerspective:
+                case InputAction.ToolPaint:
+                case InputAction.ToolPaintUnpainted:
+                case InputAction.ToolUnpaint:
+                case InputAction.ToolCloseGap:
+                case InputAction.ToolDropper:
+                case InputAction.ToolLine:
+                case InputAction.ToolRectangle:
+                case InputAction.ToolEllipse:
+                case InputAction.ToolPolyline:
+                case InputAction.ToolText:
+                case InputAction.ToolPivot:
+                case InputAction.ToolMorphing:
+                case InputAction.ToolRigging:
+                case InputAction.ToolHand:
+                case InputAction.ToolZoom:
+                case InputAction.ToolRotateView:
+                    prefs.setActiveTool(action);
+                    console.info(`[InputManager] State Mutated: Active Tool is now ${action}`);
+                    break;
+                    
+                default:
+                    console.warn(`[InputManager] Semantic Action '${action}' lacks execution logic in the dispatch router.`);
+                    break;
+            }
+        } catch (error) {
+            console.error(`[InputManager] FATAL: The Rust Engine or React UI threw an unhandled exception while executing '${action}'.`, error);
+        }
     }
 }

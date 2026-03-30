@@ -7,41 +7,39 @@ export const CanvasViewport: React.FC = () => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [isBooting, setIsBooting] = useState(true);
     
-    // Access the global store to register the engine once initialized
     const setEngineInstance = usePreferencesStore(state => state.setEngineInstance);
     const engineRef = useRef<any>(null);
     const animationFrameId = useRef<number>(0);
+    const resizeTimeoutRef = useRef<number | null>(null);
 
     useEffect(() => {
         let isMounted = true;
 
         const bootEngine = async () => {
             try {
-                // Initialize the WASM binary memory
                 await init_core();
-                
                 if (!isMounted || !canvasRef.current || !containerRef.current) return;
 
                 const engine = new AnimLabEngine();
                 engineRef.current = engine;
                 
-                // Read physical dimensions of the FlexLayout container
+                // Calculate actual hardware pixels (supports 4K and Retina Displays)
+                const dpr = window.devicePixelRatio || 1;
                 const rect = containerRef.current.getBoundingClientRect();
-                canvasRef.current.width = rect.width;
-                canvasRef.current.height = rect.height;
+                const physicalWidth = Math.max(1, Math.floor(rect.width * dpr));
+                const physicalHeight = Math.max(1, Math.floor(rect.height * dpr));
 
-                // Handshake with WebGPU
-                await engine.attach_canvas(canvasRef.current, rect.width, rect.height);
+                // Force the HTML canvas to hold the physical pixel count
+                canvasRef.current.width = physicalWidth;
+                canvasRef.current.height = physicalHeight;
+
+                await engine.attach_canvas(canvasRef.current, physicalWidth, physicalHeight);
                 
-                // Register the engine globally so the UI can command it
                 setEngineInstance(engine);
                 setIsBooting(false);
 
-                // Ignite the 60fps Native Render Loop
                 const renderLoop = () => {
-                    if (engineRef.current) {
-                        engineRef.current.render();
-                    }
+                    if (engineRef.current) { engineRef.current.render(); }
                     animationFrameId.current = requestAnimationFrame(renderLoop);
                 };
                 renderLoop();
@@ -53,9 +51,36 @@ export const CanvasViewport: React.FC = () => {
 
         bootEngine();
 
+        // AAA FIX: Hardware Swapchain Resize Observer
+        const resizeObserver = new ResizeObserver((entries) => {
+            if (!engineRef.current || !canvasRef.current) return;
+            
+            for (let entry of entries) {
+                // Debounce the resize to prevent GPU Swapchain Exhaustion during UI dragging
+                if (resizeTimeoutRef.current) window.clearTimeout(resizeTimeoutRef.current);
+                
+                resizeTimeoutRef.current = window.setTimeout(() => {
+                    const rect = entry.target.getBoundingClientRect();
+                    const dpr = window.devicePixelRatio || 1;
+                    const pWidth = Math.max(1, Math.floor(rect.width * dpr));
+                    const pHeight = Math.max(1, Math.floor(rect.height * dpr));
+
+                    if (canvasRef.current && (canvasRef.current.width !== pWidth || canvasRef.current.height !== pHeight)) {
+                        canvasRef.current.width = pWidth;
+                        canvasRef.current.height = pHeight;
+                        engineRef.current.resize_surface(pWidth, pHeight);
+                    }
+                }, 100); // Wait 100ms for layout to settle before reallocating VRAM
+            }
+        });
+
+        if (containerRef.current) resizeObserver.observe(containerRef.current);
+
         return () => {
             isMounted = false;
             cancelAnimationFrame(animationFrameId.current);
+            if (resizeTimeoutRef.current) window.clearTimeout(resizeTimeoutRef.current);
+            resizeObserver.disconnect();
             if (engineRef.current) {
                 engineRef.current.free();
                 setEngineInstance(null);
@@ -68,10 +93,12 @@ export const CanvasViewport: React.FC = () => {
         if (!engineRef.current || !canvasRef.current) return;
         canvasRef.current.setPointerCapture(e.pointerId);
         
-        // Calculate coordinate space relative to the moving FlexLayout panel
         const rect = canvasRef.current.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        const dpr = window.devicePixelRatio || 1;
+        
+        // AAA FIX: Multiply CSS coordinates by the DPI to hit the exact hardware pixel
+        const x = (e.clientX - rect.left) * dpr;
+        const y = (e.clientY - rect.top) * dpr;
         const pressure = e.pressure !== 0 ? e.pressure : 1.0;
         
         engineRef.current.begin_stroke(x, y, pressure);
@@ -81,8 +108,10 @@ export const CanvasViewport: React.FC = () => {
         if (!engineRef.current || !canvasRef.current || !canvasRef.current.hasPointerCapture(e.pointerId)) return;
         
         const rect = canvasRef.current.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        const dpr = window.devicePixelRatio || 1;
+        
+        const x = (e.clientX - rect.left) * dpr;
+        const y = (e.clientY - rect.top) * dpr;
         const pressure = e.pressure !== 0 ? e.pressure : 1.0;
         
         engineRef.current.push_point(x, y, pressure);
