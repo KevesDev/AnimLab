@@ -10,17 +10,17 @@ const CHUNK_SIZE: f32 = 128.0;
 
 #[derive(Debug)]
 pub enum NodeType {
-    // AAA BIFURCATION: Mathematical Vector Data (Infinite Scaling)
     VectorLayer { 
         strokes: HashMap<StrokeId, Stroke>,
         spatial_grid: HashMap<(i32, i32), HashSet<StrokeId>>,
     },
     
-    // AAA BIFURCATION: Raw Pixel Data (Hardware Agnostic CPU Buffer)
+    // AAA BIFURCATION: The Hardware-Agnostic Pixel Buffer
     RasterLayer {
         width: u32,
         height: u32,
-        pixels: Vec<u8>, // RGBA 8-bit channel format
+        pixels: Vec<u8>, // RGBA 8-bit array
+        is_dirty: bool,  // The Resource Manager Sync Flag
     },
     
     Composite,
@@ -39,8 +39,6 @@ pub struct AnimGraph {
     pub nodes: HashMap<NodeId, AnimNode>,
     pub edges: Vec<(NodeId, NodeId)>,
     next_id: NodeId,
-    
-    // Points to the layer the user currently has selected in the UI
     pub active_layer_node: Option<NodeId>,
 }
 
@@ -55,7 +53,6 @@ impl AnimGraph {
 
         let output_id = graph.add_node("Master Output".to_string(), NodeType::Output);
         
-        // The engine boots with a default Vector Layer to receive the brush strokes
         let initial_vector_id = graph.add_node("Vector Layer 1".to_string(), NodeType::VectorLayer { 
             strokes: HashMap::new(),
             spatial_grid: HashMap::new(),
@@ -64,7 +61,7 @@ impl AnimGraph {
         graph.active_layer_node = Some(initial_vector_id);
         graph.connect_nodes(initial_vector_id, output_id);
 
-        info!("AnimGraph Initialized: DAG Bifurcation Online (Vector & Raster Ready).");
+        info!("AnimGraph Initialized: DAG Bifurcation Online.");
         graph
     }
 
@@ -99,7 +96,6 @@ impl AnimGraph {
 
     pub fn insert_stroke_by_id(&mut self, node_id: NodeId, stroke_id: StrokeId, stroke: Stroke) {
         if let Some(node) = self.nodes.get_mut(&node_id) {
-            // Strictly enforce that math can only be injected into Vector Layers
             if let NodeType::VectorLayer { strokes, spatial_grid } = &mut node.payload {
                 let chunks = Self::get_chunks_for_aabb(&stroke.aabb);
                 for chunk in chunks {

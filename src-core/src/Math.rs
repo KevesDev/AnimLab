@@ -20,8 +20,37 @@ impl Vertex {
     }
 }
 
-// AAA ARCHITECTURE: The Bounding Box
-// A lightweight mathematical envelope used for hyper-fast spatial sorting.
+// AAA ARCHITECTURE: Raster Pipeline Vertex
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct RasterVertex {
+    pub position: [f32; 2],
+    pub tex_coords: [f32; 2],
+}
+
+impl RasterVertex {
+    pub fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<RasterVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress, shader_location: 1, format: wgpu::VertexFormat::Float32x2 },
+            ],
+        }
+    }
+}
+
+// Fullscreen quad for mounting the Raster Texture
+pub const FULLSCREEN_QUAD_VERTS: &[RasterVertex] = &[
+    RasterVertex { position: [-1.0, 1.0], tex_coords: [0.0, 0.0] }, // Top Left
+    RasterVertex { position: [-1.0, -1.0], tex_coords: [0.0, 1.0] }, // Bottom Left
+    RasterVertex { position: [1.0, -1.0], tex_coords: [1.0, 1.0] }, // Bottom Right
+    RasterVertex { position: [1.0, 1.0], tex_coords: [1.0, 0.0] }, // Top Right
+];
+
+pub const FULLSCREEN_QUAD_INDS: &[u16] = &[0, 1, 2, 0, 2, 3];
+
 #[derive(Debug, Clone, Copy)]
 pub struct AABB {
     pub min_x: f32,
@@ -31,12 +60,10 @@ pub struct AABB {
 }
 
 impl AABB {
-    /// Creates an infinitely inverted box, ready to swallow coordinates and expand.
     pub fn empty() -> Self {
         Self { min_x: f32::MAX, min_y: f32::MAX, max_x: f32::MIN, max_y: f32::MIN }
     }
 
-    /// Expands the box to engulf a given point and its physical thickness radius.
     pub fn expand_to_include(&mut self, x: f32, y: f32, radius: f32) {
         self.min_x = self.min_x.min(x - radius);
         self.min_y = self.min_y.min(y - radius);
@@ -44,7 +71,6 @@ impl AABB {
         self.max_y = self.max_y.max(y + radius);
     }
 
-    /// Checks if two bounding boxes overlap in 2D space.
     pub fn intersects(&self, other: &AABB) -> bool {
         self.min_x <= other.max_x && self.max_x >= other.min_x &&
         self.min_y <= other.max_y && self.max_y >= other.min_y
@@ -113,11 +139,7 @@ pub fn smooth_points(points: &[Point], smoothing_level: f32) -> Vec<Point> {
                 0.5 * ((2.0 * v1) + (-v0 + v2) * t + (2.0 * v0 - 5.0 * v1 + 4.0 * v2 - v3) * t2 + (-v0 + 3.0 * v1 - 3.0 * v2 + v3) * t3)
             };
 
-            smoothed.push(Point {
-                x: interpolate(p0.x, p1.x, p2.x, p3.x),
-                y: interpolate(p0.y, p1.y, p2.y, p3.y),
-                pressure: interpolate(p0.pressure, p1.pressure, p2.pressure, p3.pressure),
-            });
+            smoothed.push(Point { x: interpolate(p0.x, p1.x, p2.x, p3.x), y: interpolate(p0.y, p1.y, p2.y, p3.y), pressure: interpolate(p0.pressure, p1.pressure, p2.pressure, p3.pressure) });
         }
     }
     smoothed
