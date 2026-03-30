@@ -16,5 +16,9 @@
     },
     "devDependencies": {
         "@tauri-apps/cli": "^2.10.1"
+    },
+    "dependencies": {
+        "flexlayout-react": "^0.8.19",
+        "zustand": "^5.0.12"
     }
 }

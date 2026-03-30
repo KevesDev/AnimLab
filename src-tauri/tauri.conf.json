@@ -5,7 +5,7 @@
   "build": {
     "beforeDevCommand": "npm run dev --prefix src-ui",
     "beforeBuildCommand": "npm run build --prefix src-ui",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://localhost:3000",
     "frontendDist": "../src-ui/dist"
   },
   "app": {
