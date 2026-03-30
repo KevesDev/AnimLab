@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useState } from 'react';
 import { Layout, Model, TabNode } from 'flexlayout-react';
 import 'flexlayout-react/style/dark.css';
 
@@ -7,10 +7,10 @@ import { CanvasViewport } from './components/CanvasViewport';
 import { PropertiesPanel } from './components/PropertiesPanel';
 
 export const App: React.FC = () => {
-    // Initialize the FlexLayout mathematical model
-    const layoutModel = useRef(Model.fromJson(defaultLayoutConfig));
+    // AAA FIX: The Layout model MUST be bound to React's state lifecycle.
+    // Using a static useRef causes the mathematical grid to detach from the DOM during drag events.
+    const [layoutModel] = useState(() => Model.fromJson(defaultLayoutConfig));
 
-    // The factory maps the string names in defaultLayout.ts to actual React components
     const factory = (node: TabNode) => {
         const component = node.getComponent();
         
@@ -33,8 +33,10 @@ export const App: React.FC = () => {
     };
 
     return (
-        <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', backgroundColor: '#1e1e1e' }}>
-            <Layout model={layoutModel.current} factory={factory} />
+        // The layout container must be absolutely anchored to the OS window bounds.
+        // If it is static, FlexLayout's coordinate hit-testing calculates the drop zones incorrectly.
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden', backgroundColor: '#1e1e1e' }}>
+            <Layout model={layoutModel} factory={factory} />
         </div>
     );
 };

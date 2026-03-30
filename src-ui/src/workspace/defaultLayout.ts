@@ -6,6 +6,11 @@ export const defaultLayoutConfig: IJsonModel = {
         tabEnableClose: false,
         tabEnableRename: false,
         tabSetTabStripHeight: 32,
+        
+        // Explicitly declare the engine's global drop rules to validate hit-testing
+        tabEnableDrag: true,
+        tabSetEnableDrop: true,
+        tabSetEnableDivide: true,
     },
     borders: [
         {
@@ -15,9 +20,9 @@ export const defaultLayoutConfig: IJsonModel = {
             children: [
                 {
                     type: "tab",
-                    enableDrag: false,
                     name: "Tools",
-                    component: "ToolbarNode"
+                    component: "ToolbarNode",
+                    enableDrag: false // The vertical toolbar stays strictly pinned
                 }
             ]
         }
@@ -29,12 +34,14 @@ export const defaultLayoutConfig: IJsonModel = {
             {
                 type: "tabset",
                 weight: 80,
+                id: "canvas-area",
                 children: [
                     {
                         type: "tab",
                         name: "Viewport",
                         component: "CanvasNode",
                         enableClose: false,
+                        enableDrag: false // The central canvas remains the immovable anchor
                     }
                 ]
             },

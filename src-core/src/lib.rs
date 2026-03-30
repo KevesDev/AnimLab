@@ -7,7 +7,10 @@ use wgpu::util::DeviceExt;
 pub mod math;
 pub mod stroke;
 pub mod settings; 
+pub mod graph; // Initialize our new DAG architecture
+
 use stroke::Stroke;
+use graph::AnimGraph;
 
 // --- ERROR HANDLING ARCHITECTURE ---
 #[derive(Debug)]
@@ -52,8 +55,10 @@ pub struct AnimLabEngine {
     
     #[wasm_bindgen(skip)]
     pub active_stroke: Option<Stroke>,
+    
+    // AAA FIX: Replaced flat array with the Directed Acyclic Graph (DAG)
     #[wasm_bindgen(skip)]
-    pub completed_strokes: Vec<Stroke>,
+    pub graph: AnimGraph,
 }
 
 #[wasm_bindgen]
@@ -69,11 +74,10 @@ impl AnimLabEngine {
             surface: None,
             render_pipeline: None,
             active_stroke: None,
-            completed_strokes: Vec::new(),
+            graph: AnimGraph::new(), // Boot up the Node Engine
         })
     }
 
-    // AAA FIX: Restored the missing status check function that React needs to boot!
     #[wasm_bindgen]
     pub fn get_system_status(&self) -> String {
         if self.is_ready { String::from("AnimLab Rust Core: Online & Memory Safe.") } 
@@ -87,7 +91,6 @@ impl AnimLabEngine {
             brush_color: [r, g, b, a],
             smoothing_level: settings::get_settings().smoothing_level,
         });
-        info!("Engine Settings Updated: Thickness: {}, Color: [{}, {}, {}, {}]", thickness, r, g, b, a);
     }
 
     #[wasm_bindgen]
@@ -197,7 +200,8 @@ impl AnimLabEngine {
     pub fn end_stroke(&mut self) -> Result<(), JsValue> {
         if let Some(mut stroke) = self.active_stroke.take() {
             stroke.build_mesh(self.canvas_width, self.canvas_height);
-            self.completed_strokes.push(stroke);
+            // AAA FIX: Push the stroke safely into the Node Graph hierarchy
+            self.graph.inject_stroke(stroke);
         }
         Ok(())
     }
@@ -206,7 +210,6 @@ impl AnimLabEngine {
     pub fn render(&self) {
         if let (Some(device), Some(queue), Some(surface), Some(pipeline)) = (&self.device, &self.queue, &self.surface, &self.render_pipeline) {
             
-            // AAA FIX: Restored proper error logging to clear the unused import warning
             let output = match surface.get_current_texture() { 
                 Ok(frame) => frame, 
                 Err(wgpu::SurfaceError::Outdated) => return,
@@ -254,7 +257,10 @@ impl AnimLabEngine {
                     rp.draw_indexed(0..stroke.indices.len() as u32, 0, 0..1);
                 };
                 
-                for s in &self.completed_strokes { draw(s); }
+                // Ask the Graph to compile the render sequence
+                let render_list = self.graph.collect_renderable_strokes();
+                for s in render_list { draw(s); }
+                
                 if let Some(s) = &self.active_stroke { draw(s); }
             }
             queue.submit(std::iter::once(encoder.finish()));
