@@ -5,35 +5,24 @@ edition = "2024"
 description = "High-performance WebAssembly rendering core for AnimLab"
 authors = ["AnimLab Team"]
 
-# cdylib tells the compiler to create a dynamic system library (which becomes our .wasm file)
-# rlib tells it to also create a standard Rust library
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# The core bridge that translates Rust memory/functions into JavaScript
 wasm-bindgen = "0.2.92"
-
-# Pipes fatal Rust memory panics directly to the browser's F12 console
 console_error_panic_hook = "0.1.7"
-
-# Standard logging infrastructure
 log = "0.4.20"
 console_log = "1.0.0"
-
-# The native WebGPU graphics framework
 wgpu = { version = "28.0", features = ["webgl"] }
-
-# Allows Rust's async/await to interact with JavaScript Promises
 wasm-bindgen-futures = "0.4.42"
-
-# Translates Rust mathematical structs into pure, C-compatible byte arrays for the GPU
 bytemuck = { version = "1.15", features = ["derive"] }
-
-# Allows us to create global, thread-safe memory registries (like our Engine Settings)
 lazy_static = "1.4.0"
 
-# Gives Rust direct pointer access to physical browser DOM elements
+# AAA: Pure-Rust Computational Geometry Pipeline
+geo = "0.23"
+geo-booleanop = "0.3"
+lyon_tessellation = "1.0"
+
 [dependencies.web-sys]
 version = "0.3.69"
 features = [
@@ -42,9 +31,6 @@ features = [
     "Document",
 ]
 
-# AAA Optimization: These flags instruct the WASM compiler to heavily optimize the binary 
-# for speed, enabling bulk memory operations and SIMD (Single Instruction, Multiple Data) 
-# which drastically speeds up mathematical calculations like our tessellator.
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = [
     "-O", 

@@ -1,38 +1,32 @@
 use std::collections::{HashMap, HashSet};
-use log::{info, warn};
-use crate::stroke::Stroke;
+use log::{info, warn, error};
 use crate::math::AABB;
+use crate::geometry::VectorElement;
 
 pub type NodeId = u64;
 pub type StrokeId = u64;
 
 const CHUNK_SIZE: f32 = 128.0;
 
-#[derive(Debug)]
-pub enum NodeType {
-    VectorLayer { 
-        strokes: HashMap<StrokeId, Stroke>,
-        spatial_grid: HashMap<(i32, i32), HashSet<StrokeId>>,
-    },
-    
-    // AAA BIFURCATION: The Hardware-Agnostic Pixel Buffer
-    RasterLayer {
-        width: u32,
-        height: u32,
-        pixels: Vec<u8>, // RGBA 8-bit array
-        is_dirty: bool,  // The Resource Manager Sync Flag
-    },
-    
-    Composite,
-    Output,
+// AAA ARCHITECTURE: Decoupled ID Allocator
+// Safely passed to Tools during 'on_pointer_up' to allow dynamic fragment generation
+pub struct IdAllocator {
+    next_id: u64,
+}
+impl IdAllocator {
+    pub fn new() -> Self { Self { next_id: 1 } }
+    pub fn generate(&mut self) -> u64 { let id = self.next_id; self.next_id += 1; id }
 }
 
 #[derive(Debug)]
-pub struct AnimNode {
-    pub id: NodeId,
-    pub name: String,
-    pub payload: NodeType,
+pub enum NodeType {
+    VectorLayer { elements: HashMap<StrokeId, VectorElement>, spatial_grid: HashMap<(i32, i32), HashSet<StrokeId>> },
+    RasterLayer { width: u32, height: u32, pixels: Vec<u8>, is_dirty: bool },
+    Composite, Output,
 }
+
+#[derive(Debug)]
+pub struct AnimNode { pub id: NodeId, pub name: String, pub payload: NodeType }
 
 #[derive(Debug)]
 pub struct AnimGraph {
@@ -44,77 +38,50 @@ pub struct AnimGraph {
 
 impl AnimGraph {
     pub fn new() -> Self {
-        let mut graph = Self {
-            nodes: HashMap::new(),
-            edges: Vec::new(),
-            next_id: 1, 
-            active_layer_node: None,
-        };
-
+        let mut graph = Self { nodes: HashMap::new(), edges: Vec::new(), next_id: 1, active_layer_node: None };
         let output_id = graph.add_node("Master Output".to_string(), NodeType::Output);
-        
-        let initial_vector_id = graph.add_node("Vector Layer 1".to_string(), NodeType::VectorLayer { 
-            strokes: HashMap::new(),
-            spatial_grid: HashMap::new(),
-        });
-        
+        let initial_vector_id = graph.add_node("Vector Layer 1".to_string(), NodeType::VectorLayer { elements: HashMap::new(), spatial_grid: HashMap::new() });
         graph.active_layer_node = Some(initial_vector_id);
         graph.connect_nodes(initial_vector_id, output_id);
-
-        info!("AnimGraph Initialized: DAG Bifurcation Online.");
+        info!("AnimGraph Initialized: DAG utilizing global geometry pipeline.");
         graph
     }
 
     pub fn add_node(&mut self, name: String, payload: NodeType) -> NodeId {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.next_id; self.next_id += 1;
         let node = AnimNode { id, name, payload };
         self.nodes.insert(id, node);
         id
     }
 
     pub fn connect_nodes(&mut self, source_id: NodeId, target_id: NodeId) {
-        if self.nodes.contains_key(&source_id) && self.nodes.contains_key(&target_id) {
-            self.edges.push((source_id, target_id));
-        }
+        if self.nodes.contains_key(&source_id) && self.nodes.contains_key(&target_id) { self.edges.push((source_id, target_id)); } 
+        else { error!("DAG Integrity Error: Attempted to connect missing nodes {} -> {}", source_id, target_id); }
     }
 
     fn get_chunks_for_aabb(aabb: &AABB) -> Vec<(i32, i32)> {
-        let start_x = (aabb.min_x / CHUNK_SIZE).floor() as i32;
-        let end_x = (aabb.max_x / CHUNK_SIZE).floor() as i32;
-        let start_y = (aabb.min_y / CHUNK_SIZE).floor() as i32;
-        let end_y = (aabb.max_y / CHUNK_SIZE).floor() as i32;
-
+        let start_x = (aabb.min_x / CHUNK_SIZE).floor() as i32; let end_x = (aabb.max_x / CHUNK_SIZE).floor() as i32;
+        let start_y = (aabb.min_y / CHUNK_SIZE).floor() as i32; let end_y = (aabb.max_y / CHUNK_SIZE).floor() as i32;
         let mut chunks = Vec::new();
-        for x in start_x..=end_x {
-            for y in start_y..=end_y {
-                chunks.push((x, y));
-            }
-        }
+        for x in start_x..=end_x { for y in start_y..=end_y { chunks.push((x, y)); } }
         chunks
     }
 
-    pub fn insert_stroke_by_id(&mut self, node_id: NodeId, stroke_id: StrokeId, stroke: Stroke) {
+    pub fn insert_stroke_by_id(&mut self, node_id: NodeId, stroke_id: StrokeId, element: VectorElement) {
         if let Some(node) = self.nodes.get_mut(&node_id) {
-            if let NodeType::VectorLayer { strokes, spatial_grid } = &mut node.payload {
-                let chunks = Self::get_chunks_for_aabb(&stroke.aabb);
-                for chunk in chunks {
-                    spatial_grid.entry(chunk).or_insert_with(HashSet::new).insert(stroke_id);
-                }
-                strokes.insert(stroke_id, stroke);
-                return;
-            } else {
-                warn!("Engine Collision: Attempted to inject Vector Math into a Raster/Composite Node [{}].", node_id);
-                return;
-            }
-        }
+            if let NodeType::VectorLayer { elements, spatial_grid } = &mut node.payload {
+                let chunks = Self::get_chunks_for_aabb(element.aabb());
+                for chunk in chunks { spatial_grid.entry(chunk).or_insert_with(HashSet::new).insert(stroke_id); }
+                elements.insert(stroke_id, element);
+            } else { warn!("Engine Routing Error: Tool targeted a Raster Node [{}]. Discarding geometry.", node_id); }
+        } else { error!("Engine Routing Error: Node [{}] does not exist.", node_id); }
     }
 
     pub fn remove_stroke_by_id(&mut self, node_id: NodeId, stroke_id: StrokeId) {
         if let Some(node) = self.nodes.get_mut(&node_id) {
-            if let NodeType::VectorLayer { strokes, spatial_grid } = &mut node.payload {
-                if let Some(stroke) = strokes.get(&stroke_id) {
-                    let chunks = Self::get_chunks_for_aabb(&stroke.aabb);
+            if let NodeType::VectorLayer { elements, spatial_grid } = &mut node.payload {
+                if let Some(element) = elements.get(&stroke_id) {
+                    let chunks = Self::get_chunks_for_aabb(element.aabb());
                     for chunk in chunks {
                         if let Some(cell) = spatial_grid.get_mut(&chunk) {
                             cell.remove(&stroke_id);
@@ -122,47 +89,38 @@ impl AnimGraph {
                         }
                     }
                 }
-                strokes.remove(&stroke_id);
-                return;
+                elements.remove(&stroke_id);
             }
         }
     }
 
-    pub fn query_spatial_grid(&self, node_id: NodeId, target_aabb: &AABB) -> Vec<&Stroke> {
-        let mut found_strokes = Vec::new();
-        let mut checked_ids = HashSet::new(); 
+    pub fn collect_renderable_elements(&self) -> Vec<&VectorElement> {
+        let mut render_list = Vec::new();
+        for node in self.nodes.values() {
+            if let NodeType::VectorLayer { elements, .. } = &node.payload {
+                for element in elements.values() { render_list.push(element); }
+            }
+        }
+        render_list
+    }
 
+    // AAA UPGRADE: Fast-path querying for the Boolean Slicer
+    pub fn query_spatial_grid_ids(&self, node_id: NodeId, target_aabb: &AABB) -> Vec<StrokeId> {
+        let mut found_ids = HashSet::new();
         if let Some(node) = self.nodes.get(&node_id) {
-            if let NodeType::VectorLayer { strokes, spatial_grid } = &node.payload {
-                let chunks_to_check = Self::get_chunks_for_aabb(target_aabb);
-                
-                for chunk in chunks_to_check {
-                    if let Some(stroke_ids_in_chunk) = spatial_grid.get(&chunk) {
-                        for id in stroke_ids_in_chunk {
-                            if checked_ids.insert(*id) { 
-                                if let Some(stroke) = strokes.get(id) {
-                                    if stroke.aabb.intersects(target_aabb) {
-                                        found_strokes.push(stroke);
-                                    }
-                                }
+            if let NodeType::VectorLayer { elements, spatial_grid } = &node.payload {
+                let chunks = Self::get_chunks_for_aabb(target_aabb);
+                for chunk in chunks {
+                    if let Some(ids) = spatial_grid.get(&chunk) {
+                        for id in ids {
+                            if let Some(element) = elements.get(id) {
+                                if element.aabb().intersects(target_aabb) { found_ids.insert(*id); }
                             }
                         }
                     }
                 }
             }
         }
-        found_strokes
-    }
-
-    pub fn collect_renderable_strokes(&self) -> Vec<&Stroke> {
-        let mut render_list = Vec::new();
-        for node in self.nodes.values() {
-            if let NodeType::VectorLayer { strokes, .. } = &node.payload {
-                for stroke in strokes.values() {
-                    render_list.push(stroke);
-                }
-            }
-        }
-        render_list
+        found_ids.into_iter().collect()
     }
 }
