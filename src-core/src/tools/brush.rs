@@ -22,8 +22,7 @@ impl CanvasTool for BrushTool {
         if let Some(settings) = self.settings_snapshot.take() {
             let smoothed = smooth_spline(&self.raw_points, settings.smoothing_level);
             let (shape, vertices, indices, aabb) = Extruder::extrude_contour(&smoothed, settings.brush_thickness, settings.brush_color, canvas_width, canvas_height);
-            // AAA FIX: Initialize with empty mask array
-            let contour = ContourStroke { shape, color: settings.brush_color, vertices, indices, aabb, eraser_masks: Vec::new() };
+            let contour = ContourStroke { shape, color: settings.brush_color, vertices, indices, aabb, eraser_masks: Vec::new(), clip_masks: Vec::new() };
             self.raw_points.clear();
             Some(Box::new(AddStrokeCommand { target_node_id: active_node_id, stroke_id: id_allocator.generate(), element: VectorElement::Contour(contour) }))
         } else { None }

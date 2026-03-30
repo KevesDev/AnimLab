@@ -14,15 +14,13 @@ impl Extruder {
     ) -> (Vec<Vertex>, Vec<u16>, AABB) {
         let mut buffers: VertexBuffers<Vertex, u16> = VertexBuffers::new();
         let mut tessellator = FillTessellator::new();
-        
         let mut options = FillOptions::default();
-        options.fill_rule = lyon_tessellation::FillRule::NonZero; // AAA FIX: Solidifies overlaps
+        options.fill_rule = lyon_tessellation::FillRule::NonZero; 
 
         let mut aabb = AABB::empty();
 
         for poly in multipoly.iter() {
             let mut builder = Path::builder();
-            
             let ext = poly.exterior();
             if !ext.0.is_empty() {
                 for pt in ext.0.iter() { aabb.expand_to_include(pt.x, pt.y, 0.0); }
@@ -30,7 +28,6 @@ impl Extruder {
                 for pt in ext.0.iter().skip(1) { builder.line_to(lyon_point(pt.x, pt.y)); }
                 builder.end(true);
             }
-
             for int in poly.interiors() {
                 if int.0.is_empty() { continue; }
                 builder.begin(lyon_point(int.0[0].x, int.0[0].y));
@@ -38,16 +35,14 @@ impl Extruder {
                 builder.end(true);
             }
 
-            let path = builder.build();
-
             tessellator.tessellate_path(
-                &path, &options,
+                &builder.build(), &options,
                 &mut BuffersBuilder::new(&mut buffers, |vertex: FillVertex| {
                     let px = vertex.position().x; let py = vertex.position().y;
                     let clip_x = (px / canvas_width) * 2.0 - 1.0; let clip_y = 1.0 - (py / canvas_height) * 2.0;
                     Vertex { position: [clip_x, clip_y], color, tex_coords: [0.0, 0.0] }
                 }),
-            ).unwrap_or_else(|e| log::warn!("Tessellation failed: {:?}", e));
+            ).unwrap_or_else(|_| ());
         }
         (buffers.vertices, buffers.indices, aabb)
     }
@@ -57,9 +52,7 @@ impl Extruder {
     ) -> (MultiPolygon<f32>, Vec<Vertex>, Vec<u16>, AABB) {
         if points.len() < 2 { return (MultiPolygon::new(vec![]), Vec::new(), Vec::new(), AABB::empty()); }
 
-        let mut top_points = Vec::new();
-        let mut bot_points = Vec::new();
-
+        let mut top_points = Vec::new(); let mut bot_points = Vec::new();
         for i in 0..points.len() {
             let current = &points[i];
             let (dx, dy) = if i < points.len() - 1 { let next = &points[i + 1]; (next.x - current.x, next.y - current.y) } 
@@ -82,6 +75,31 @@ impl Extruder {
 
         let (vertices, indices, aabb) = Self::tessellate_multipolygon(&multipoly, color, canvas_width, canvas_height);
         (multipoly, vertices, indices, aabb)
+    }
+
+    // AAA UPGRADE: Turns a Lasso line into a solid GPU Stencil Mask
+    pub fn tessellate_lasso(points: &[Point], canvas_width: f32, canvas_height: f32) -> (Vec<Vertex>, Vec<u16>) {
+        if points.len() < 3 { return (Vec::new(), Vec::new()); }
+        let mut buffers: VertexBuffers<Vertex, u16> = VertexBuffers::new();
+        let mut tessellator = FillTessellator::new();
+        let mut options = FillOptions::default();
+        options.fill_rule = lyon_tessellation::FillRule::NonZero;
+
+        let mut builder = Path::builder();
+        builder.begin(lyon_point(points[0].x, points[0].y));
+        for pt in points.iter().skip(1) { builder.line_to(lyon_point(pt.x, pt.y)); }
+        builder.end(true);
+
+        tessellator.tessellate_path(
+            &builder.build(), &options,
+            &mut BuffersBuilder::new(&mut buffers, |vertex: FillVertex| {
+                let px = vertex.position().x; let py = vertex.position().y;
+                let clip_x = (px / canvas_width) * 2.0 - 1.0; let clip_y = 1.0 - (py / canvas_height) * 2.0;
+                Vertex { position: [clip_x, clip_y], color: [1.0; 4], tex_coords: [0.0, 0.0] }
+            }),
+        ).unwrap_or_else(|_| ());
+
+        (buffers.vertices, buffers.indices)
     }
     
     pub fn extrude_centerline(

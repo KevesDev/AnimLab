@@ -1,6 +1,7 @@
 use super::{Point, VectorElement, CenterlineStroke, ContourStroke, EraserMask};
 use crate::geometry::tessellator::Extruder;
-use crate::geometry::spline::smooth_spline;
+use crate::math::AABB;
+use geo::{Polygon, LineString, Coord, Contains};
 
 pub struct BooleanSlicer;
 
@@ -36,28 +37,19 @@ impl BooleanSlicer {
     ) -> Vec<VectorElement> {
         match element {
             VectorElement::Contour(contour) => {
-                // AAA ARCHITECTURE: Stencil Masking
-                // We do NOT perform heavy CPU math. We generate a fast triangle mesh of the eraser stroke 
-                // and attach it to the contour. The WebGPU pipeline handles the visual subtraction.
-                let smoothed_eraser = smooth_spline(raw_sweep, smoothing);
+                let smoothed_eraser = crate::geometry::spline::smooth_spline(raw_sweep, smoothing);
                 let (_, vertices, indices, _) = Extruder::extrude_contour(
                     &smoothed_eraser, base_thickness, [1.0, 1.0, 1.0, 1.0], canvas_width, canvas_height
                 );
-                
                 let mut new_masks = contour.eraser_masks.clone();
                 new_masks.push(EraserMask { vertices, indices });
 
                 vec![VectorElement::Contour(ContourStroke {
-                    shape: contour.shape.clone(),
-                    color: contour.color,
-                    vertices: contour.vertices.clone(),
-                    indices: contour.indices.clone(),
-                    aabb: contour.aabb,
-                    eraser_masks: new_masks,
+                    shape: contour.shape.clone(), color: contour.color, vertices: contour.vertices.clone(),
+                    indices: contour.indices.clone(), aabb: contour.aabb, eraser_masks: new_masks, clip_masks: contour.clip_masks.clone()
                 })]
             },
             VectorElement::Centerline(centerline) => {
-                // Centerlines are 1D arrays, so O(N) distance checks are safe and blistering fast on the CPU.
                 let mut dense_points = Vec::new();
                 if !centerline.points.is_empty() {
                     dense_points.push(centerline.points[0]);
@@ -85,17 +77,103 @@ impl BooleanSlicer {
 
                 let mut new_elements = Vec::new();
                 for frag in fragments {
-                    let mut simplified = vec![frag[0]];
-                    for i in 1..frag.len()-1 {
-                        let p1 = simplified.last().unwrap(); let p2 = &frag[i];
-                        if ((p2.x - p1.x).powi(2) + (p2.y - p1.y).powi(2)).sqrt() > 5.0 { simplified.push(*p2); }
-                    }
-                    simplified.push(*frag.last().unwrap());
-
-                    let (vertices, indices, aabb) = Extruder::extrude_centerline(&simplified, centerline.thickness, centerline.color, canvas_width, canvas_height);
-                    new_elements.push(VectorElement::Centerline(CenterlineStroke { points: simplified, thickness: centerline.thickness, color: centerline.color, vertices, indices, aabb }));
+                    let (vertices, indices, aabb) = Extruder::extrude_centerline(&frag, centerline.thickness, centerline.color, canvas_width, canvas_height);
+                    new_elements.push(VectorElement::Centerline(CenterlineStroke { points: frag, thickness: centerline.thickness, color: centerline.color, vertices, indices, aabb }));
                 }
                 new_elements
+            }
+        }
+    }
+
+    pub fn lasso_slice(
+        element: &VectorElement, lasso_points: &[Point], canvas_width: f32, canvas_height: f32
+    ) -> Vec<VectorElement> {
+        if lasso_points.len() < 3 { return vec![element.clone()]; }
+
+        let mut coords = Vec::new();
+        let mut lasso_aabb = AABB::empty();
+        
+        for pt in lasso_points { 
+            coords.push(Coord { x: pt.x as f64, y: pt.y as f64 }); 
+            lasso_aabb.expand_to_include(pt.x, pt.y, 0.0);
+        }
+        coords.push(Coord { x: lasso_points[0].x as f64, y: lasso_points[0].y as f64 });
+        
+        let lasso_poly = Polygon::new(LineString::new(coords), vec![]);
+
+        match element {
+            VectorElement::Contour(contour) => {
+                let (lasso_verts, lasso_inds) = Extruder::tessellate_lasso(lasso_points, canvas_width, canvas_height);
+                let lasso_mask = EraserMask { vertices: lasso_verts, indices: lasso_inds };
+
+                let mut outside_contour = contour.clone();
+                outside_contour.eraser_masks.push(lasso_mask.clone());
+
+                let mut inside_contour = contour.clone();
+                inside_contour.clip_masks.push(lasso_mask);
+
+                // AAA FIX: Clamp the Bounding Box of the severed fragment to exactly match the Lasso bounds.
+                // This permanently stops the spatial grid from infinitely catching and duplicating this fragment.
+                inside_contour.aabb.min_x = contour.aabb.min_x.max(lasso_aabb.min_x);
+                inside_contour.aabb.min_y = contour.aabb.min_y.max(lasso_aabb.min_y);
+                inside_contour.aabb.max_x = contour.aabb.max_x.min(lasso_aabb.max_x);
+                inside_contour.aabb.max_y = contour.aabb.max_y.min(lasso_aabb.max_y);
+
+                if inside_contour.aabb.min_x > inside_contour.aabb.max_x || inside_contour.aabb.min_y > inside_contour.aabb.max_y {
+                    return vec![VectorElement::Contour(outside_contour)];
+                }
+
+                vec![ VectorElement::Contour(inside_contour), VectorElement::Contour(outside_contour) ]
+            },
+            VectorElement::Centerline(centerline) => {
+                let mut inside_fragments = Vec::new();
+                let mut outside_fragments = Vec::new();
+                let mut current_fragment = Vec::new();
+                
+                if centerline.points.is_empty() { return Vec::new(); }
+                let mut current_state_is_inside = lasso_poly.contains(&geo::Point::new(centerline.points[0].x as f64, centerline.points[0].y as f64));
+
+                for pt in &centerline.points {
+                    let is_inside = lasso_poly.contains(&geo::Point::new(pt.x as f64, pt.y as f64));
+                    
+                    if is_inside != current_state_is_inside {
+                        current_fragment.push(*pt); 
+                        
+                        if current_fragment.len() >= 2 {
+                            if current_state_is_inside { inside_fragments.push(current_fragment.clone()); } 
+                            else { outside_fragments.push(current_fragment.clone()); }
+                        }
+                        current_fragment.clear();
+                        current_fragment.push(*pt); 
+                        current_state_is_inside = is_inside;
+                    } else {
+                        current_fragment.push(*pt);
+                    }
+                }
+                
+                if current_fragment.len() >= 2 {
+                    if current_state_is_inside { inside_fragments.push(current_fragment); } 
+                    else { outside_fragments.push(current_fragment); }
+                }
+
+                let mut results = Vec::new();
+                let mut build_fragments = |frags: Vec<Vec<Point>>| {
+                    for frag in frags {
+                        let mut simplified = vec![frag[0]];
+                        for i in 1..frag.len()-1 {
+                            let p1 = simplified.last().unwrap(); let p2 = &frag[i];
+                            if ((p2.x - p1.x).powi(2) + (p2.y - p1.y).powi(2)).sqrt() > 5.0 { simplified.push(*p2); }
+                        }
+                        simplified.push(*frag.last().unwrap());
+
+                        let (vertices, indices, aabb) = Extruder::extrude_centerline(&simplified, centerline.thickness, centerline.color, canvas_width, canvas_height);
+                        results.push(VectorElement::Centerline(CenterlineStroke { points: simplified, thickness: centerline.thickness, color: centerline.color, vertices, indices, aabb }));
+                    }
+                };
+
+                build_fragments(inside_fragments);
+                build_fragments(outside_fragments);
+                results
             }
         }
     }

@@ -14,8 +14,7 @@ pub mod tools;
 
 use graph::{AnimGraph, IdAllocator};
 use command::CommandHistory;
-// AAA FIX: Removed the unused PreviewBlendMode import
-use tools::{CanvasTool, brush::BrushTool, pencil::PencilTool, eraser::EraserTool};
+use tools::{CanvasTool, brush::BrushTool, pencil::PencilTool, eraser::EraserTool, cutter::CutterTool, select::SelectTool};
 use geometry::VectorElement;
 
 #[derive(Debug)]
@@ -48,7 +47,8 @@ pub struct AnimLabEngine {
     
     #[wasm_bindgen(skip)] pub standard_pipeline: Option<wgpu::RenderPipeline>,
     #[wasm_bindgen(skip)] pub stencil_write_pipeline: Option<wgpu::RenderPipeline>, 
-    #[wasm_bindgen(skip)] pub stencil_read_pipeline: Option<wgpu::RenderPipeline>, 
+    #[wasm_bindgen(skip)] pub stencil_read_0_pipeline: Option<wgpu::RenderPipeline>, 
+    #[wasm_bindgen(skip)] pub stencil_read_1_pipeline: Option<wgpu::RenderPipeline>, 
     #[wasm_bindgen(skip)] pub depth_stencil_texture: Option<wgpu::TextureView>,
     
     #[wasm_bindgen(skip)] pub raster_pipeline: Option<wgpu::RenderPipeline>,
@@ -70,7 +70,7 @@ impl AnimLabEngine {
         Ok(AnimLabEngine {
             is_ready: true, canvas_width: 0.0, canvas_height: 0.0,
             device: None, queue: None, surface: None, config: None,
-            standard_pipeline: None, stencil_write_pipeline: None, stencil_read_pipeline: None, depth_stencil_texture: None,
+            standard_pipeline: None, stencil_write_pipeline: None, stencil_read_0_pipeline: None, stencil_read_1_pipeline: None, depth_stencil_texture: None,
             raster_pipeline: None, raster_bind_group_layout: None,
             raster_cache: HashMap::new(), quad_vb: None, quad_ib: None,
             active_tool: Box::new(BrushTool::new()), 
@@ -80,8 +80,10 @@ impl AnimLabEngine {
 
     #[wasm_bindgen] pub fn get_system_status(&self) -> String { if self.is_ready { String::from("AnimLab Rust Core: Online.") } else { String::from("AnimLab Rust Core: FATAL OFFLINE.") } }
     #[wasm_bindgen] pub fn set_brush_settings(&mut self, thickness: f32, r: f32, g: f32, b: f32, a: f32) { settings::update_settings(settings::EngineSettings { brush_thickness: thickness, brush_color: [r, g, b, a], smoothing_level: settings::get_settings().smoothing_level }); }
-    #[wasm_bindgen] pub fn trigger_undo(&mut self) { self.history.undo(&mut self.graph); }
-    #[wasm_bindgen] pub fn trigger_redo(&mut self) { self.history.redo(&mut self.graph); }
+    
+    // AAA FIX: Undo/Redo now accept canvas dimensions to reverse spatial translations properly
+    #[wasm_bindgen] pub fn trigger_undo(&mut self) { self.history.undo(&mut self.graph, self.canvas_width, self.canvas_height); }
+    #[wasm_bindgen] pub fn trigger_redo(&mut self) { self.history.redo(&mut self.graph, self.canvas_width, self.canvas_height); }
 
     #[wasm_bindgen]
     pub fn set_active_tool(&mut self, tool_name: &str) {
@@ -90,6 +92,8 @@ impl AnimLabEngine {
             "ToolBrush" => self.active_tool = Box::new(BrushTool::new()),
             "ToolPencil" => self.active_tool = Box::new(PencilTool::new()), 
             "ToolEraser" => self.active_tool = Box::new(EraserTool::new()), 
+            "ToolCutter" => self.active_tool = Box::new(CutterTool::new()), 
+            "ToolSelect" => self.active_tool = Box::new(SelectTool::new()), // Plugs the Select tool into the UI router
             _ => { warn!("Tool [{}] safely defaulting to Brush.", tool_name); self.active_tool = Box::new(BrushTool::new()); }
         }
     }
@@ -111,9 +115,6 @@ impl AnimLabEngine {
         let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("Vector Pipeline Layout"), bind_group_layouts: &[], immediate_size: 0 });
         let blend_state_normal = wgpu::BlendState { color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add }, alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add } };
 
-        // AAA FIX: Migrated depth bias from raw integers to wgpu::DepthBiasState::default() structs
-        
-        // 1. Standard Pipeline (No Stencil)
         let standard_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Standard Vector Pipeline"), layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"), buffers: &[math::Vertex::desc()], compilation_options: Default::default() },
@@ -123,7 +124,6 @@ impl AnimLabEngine {
             multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
         });
 
-        // 2. Stencil Write Pipeline (Writes 1 to Stencil, Color Disabled)
         let stencil_write_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Stencil Write Pipeline"), layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"), buffers: &[math::Vertex::desc()], compilation_options: Default::default() },
@@ -133,9 +133,17 @@ impl AnimLabEngine {
             multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
         });
 
-        // 3. Stencil Read Pipeline (Only draws where Stencil == 0)
-        let stencil_read_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Stencil Read Pipeline"), layout: Some(&render_pipeline_layout),
+        let stencil_read_0_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Stencil Read 0 Pipeline"), layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"), buffers: &[math::Vertex::desc()], compilation_options: Default::default() },
+            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_main"), targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(blend_state_normal), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, strip_index_format: None, front_face: wgpu::FrontFace::Ccw, cull_mode: None, unclipped_depth: false, polygon_mode: wgpu::PolygonMode::Fill, conservative: false },
+            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth24PlusStencil8, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: wgpu::StencilState { front: wgpu::StencilFaceState { compare: wgpu::CompareFunction::Equal, fail_op: wgpu::StencilOperation::Keep, depth_fail_op: wgpu::StencilOperation::Keep, pass_op: wgpu::StencilOperation::Keep }, back: wgpu::StencilFaceState::default(), read_mask: !0, write_mask: 0 }, bias: wgpu::DepthBiasState::default() }),
+            multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
+        });
+
+        let stencil_read_1_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Stencil Read 1 Pipeline"), layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"), buffers: &[math::Vertex::desc()], compilation_options: Default::default() },
             fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_main"), targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(blend_state_normal), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
             primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, strip_index_format: None, front_face: wgpu::FrontFace::Ccw, cull_mode: None, unclipped_depth: false, polygon_mode: wgpu::PolygonMode::Fill, conservative: false },
@@ -160,7 +168,7 @@ impl AnimLabEngine {
         let quad_ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("Quad IB"), contents: bytemuck::cast_slice(math::FULLSCREEN_QUAD_INDS), usage: wgpu::BufferUsages::INDEX });
         
         self.device = Some(device); self.queue = Some(queue); self.surface = Some(surface); self.config = Some(config); 
-        self.standard_pipeline = Some(standard_pipeline); self.stencil_write_pipeline = Some(stencil_write_pipeline); self.stencil_read_pipeline = Some(stencil_read_pipeline); self.depth_stencil_texture = Some(depth_stencil_texture);
+        self.standard_pipeline = Some(standard_pipeline); self.stencil_write_pipeline = Some(stencil_write_pipeline); self.stencil_read_0_pipeline = Some(stencil_read_0_pipeline); self.stencil_read_1_pipeline = Some(stencil_read_1_pipeline); self.depth_stencil_texture = Some(depth_stencil_texture);
         self.raster_pipeline = Some(raster_pipeline); self.raster_bind_group_layout = Some(raster_bind_group_layout); self.quad_vb = Some(quad_vb); self.quad_ib = Some(quad_ib);
         Ok(())
     }
@@ -174,28 +182,45 @@ impl AnimLabEngine {
         }
     }
 
-    #[wasm_bindgen] pub fn begin_stroke(&mut self, x: f32, y: f32, pressure: f32) -> Result<(), JsValue> { let settings = settings::get_settings(); self.active_tool.on_pointer_down(x, y, pressure, settings); Ok(()) }
+    #[wasm_bindgen] pub fn begin_stroke(&mut self, x: f32, y: f32, pressure: f32) -> Result<(), JsValue> { 
+        let settings = settings::get_settings(); 
+        let active_node_id = self.graph.active_layer_node.expect("Fatal Engine Error: Missing active layer.");
+        self.active_tool.on_pointer_down(x, y, pressure, settings, active_node_id, &mut self.graph); 
+        Ok(()) 
+    }
     
     #[wasm_bindgen] pub fn push_point(&mut self, x: f32, y: f32, pressure: f32) -> Result<(), JsValue> {
+        let active_node_id = self.graph.active_layer_node.expect("Fatal Engine Error: Missing active layer.");
+        let canvas_w = self.canvas_width;
+        let canvas_h = self.canvas_height;
+        
+        // Disconnect borrows to satisfy the compiler
+        let tool = &mut self.active_tool;
+        let graph = &mut self.graph;
+
         let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            self.active_tool.on_pointer_move(x, y, pressure, &self.graph);
-        })).unwrap_or_else(|_| {
-            error!("AAA Safety Net: Handled math panic in push_point.");
-        });
+            tool.on_pointer_move(x, y, pressure, active_node_id, graph, canvas_w, canvas_h);
+        })).unwrap_or_else(|_| { error!("AAA Safety Net: Handled math panic in push_point."); });
         Ok(())
     }
     
     #[wasm_bindgen] pub fn end_stroke(&mut self) -> Result<(), JsValue> {
         let target_node_id = self.graph.active_layer_node.expect("Fatal Engine Error: Missing active layer.");
-        
+        let canvas_w = self.canvas_width;
+        let canvas_h = self.canvas_height;
+
+        let tool = &mut self.active_tool;
+        let allocator = &mut self.id_allocator;
+        let graph = &mut self.graph;
+
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            self.active_tool.on_pointer_up(target_node_id, &mut self.id_allocator, self.canvas_width, self.canvas_height, &self.graph)
+            tool.on_pointer_up(target_node_id, allocator, canvas_w, canvas_h, graph)
         }));
 
         match result {
-            Ok(Some(command)) => self.history.push_and_execute(command, &mut self.graph),
+            Ok(Some(command)) => self.history.push_and_execute(command, &mut self.graph, canvas_w, canvas_h),
             Ok(None) => {}, 
-            Err(_) => { error!("AAA Safety Net: Handled geometric panic during final slice. DAG integrity maintained."); }
+            Err(_) => { error!("AAA Safety Net: Handled geometric panic during final slice."); }
         }
         Ok(())
     }
@@ -223,7 +248,9 @@ impl AnimLabEngine {
                     rp_ref.set_vertex_buffer(0, vb.slice(..)); rp_ref.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16); rp_ref.draw_indexed(0..indices.len() as u32, 0, 0..1);
                 };
 
-                if let (Some(standard_pipe), Some(stencil_write), Some(stencil_read)) = (&self.standard_pipeline, &self.stencil_write_pipeline, &self.stencil_read_pipeline) {
+                if let (Some(standard_pipe), Some(stencil_write), Some(stencil_read_0), Some(stencil_read_1)) = 
+                    (&self.standard_pipeline, &self.stencil_write_pipeline, &self.stencil_read_0_pipeline, &self.stencil_read_1_pipeline) {
+                    
                     let render_list = self.graph.collect_renderable_elements();
                     for element in render_list { 
                         match element {
@@ -231,28 +258,55 @@ impl AnimLabEngine {
                                 rp.set_pipeline(standard_pipe); draw(&mut rp, &c.vertices, &c.indices);
                             }
                             VectorElement::Contour(c) => {
-                                if c.eraser_masks.is_empty() {
+                                if c.clip_masks.is_empty() && c.eraser_masks.is_empty() {
                                     rp.set_pipeline(standard_pipe); draw(&mut rp, &c.vertices, &c.indices);
-                                } else {
-                                    // 1. Draw all masks to Stencil buffer (writing 1s)
+                                } else if c.clip_masks.is_empty() {
                                     rp.set_pipeline(stencil_write);
                                     rp.set_stencil_reference(1);
                                     for mask in &c.eraser_masks { draw(&mut rp, &mask.vertices, &mask.indices); }
                                     
-                                    // 2. Draw Contour where Stencil == 0
-                                    rp.set_pipeline(stencil_read);
+                                    rp.set_pipeline(stencil_read_0);
                                     rp.set_stencil_reference(0);
                                     draw(&mut rp, &c.vertices, &c.indices);
 
-                                    // 3. Clear Stencil to 0 for the next stroke
                                     rp.set_pipeline(stencil_write);
                                     rp.set_stencil_reference(0);
                                     for mask in &c.eraser_masks { draw(&mut rp, &mask.vertices, &mask.indices); }
+                                } else {
+                                    rp.set_pipeline(stencil_write);
+                                    rp.set_stencil_reference(1);
+                                    for mask in &c.clip_masks { draw(&mut rp, &mask.vertices, &mask.indices); }
+
+                                    rp.set_stencil_reference(0);
+                                    for mask in &c.eraser_masks { draw(&mut rp, &mask.vertices, &mask.indices); }
+
+                                    rp.set_pipeline(stencil_read_1);
+                                    rp.set_stencil_reference(1);
+                                    draw(&mut rp, &c.vertices, &c.indices);
+
+                                    rp.set_pipeline(stencil_write);
+                                    rp.set_stencil_reference(0);
+                                    for mask in &c.clip_masks { draw(&mut rp, &mask.vertices, &mask.indices); }
                                 }
                             }
                         }
                     }
                     
+                    // AAA VISUAL POP: Draw the crisp blue Bounding Box around active selections
+                    let target_node_id = self.graph.active_layer_node.unwrap_or(1);
+                    if let Some(aabb) = self.graph.get_selection_aabb(target_node_id) {
+                        let pts = vec![
+                            geometry::Point { x: aabb.min_x, y: aabb.min_y, pressure: 1.0 },
+                            geometry::Point { x: aabb.max_x, y: aabb.min_y, pressure: 1.0 },
+                            geometry::Point { x: aabb.max_x, y: aabb.max_y, pressure: 1.0 },
+                            geometry::Point { x: aabb.min_x, y: aabb.max_y, pressure: 1.0 },
+                            geometry::Point { x: aabb.min_x, y: aabb.min_y, pressure: 1.0 },
+                        ];
+                        let (verts, inds, _) = geometry::tessellator::Extruder::extrude_centerline(&pts, 2.0, [0.2, 0.6, 1.0, 1.0], self.canvas_width, self.canvas_height);
+                        rp.set_pipeline(standard_pipe);
+                        draw(&mut rp, &verts, &inds);
+                    }
+
                     let (preview_verts, preview_inds) = self.active_tool.get_preview_mesh(self.canvas_width, self.canvas_height);
                     rp.set_pipeline(standard_pipe);
                     draw(&mut rp, &preview_verts, &preview_inds);
