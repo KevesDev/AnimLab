@@ -1,0 +1,1 @@
+F:\AnimLab\target\wasm32-unknown-unknown\release\libanimlab_core.rlib: F:\AnimLab\src-core\src\Math.rs F:\AnimLab\src-core\src\lib.rs F:\AnimLab\src-core\src\settings.rs F:\AnimLab\src-core\src\shader.wgsl F:\AnimLab\src-core\src\stroke.rs
