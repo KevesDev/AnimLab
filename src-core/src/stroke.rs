@@ -1,6 +1,5 @@
 use log::warn;
 use crate::math::{Vertex, Tessellator, AABB};
-use crate::settings; 
 
 #[derive(Debug, Clone, Copy)]
 pub struct Point {
@@ -20,7 +19,6 @@ pub struct Stroke {
     pub points: Vec<Point>,
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u16>,
-    // AAA: The bounding box required for spatial collision
     pub aabb: AABB,
 }
 
@@ -39,17 +37,16 @@ impl Stroke {
         if pt.is_valid() {
             self.points.push(pt);
         } else {
-            warn!("Hardware injected invalid point data (NaN/Inf). Point explicitly discarded.");
+            warn!("Hardware injected invalid point data. Point explicitly discarded.");
         }
     }
 
-    pub fn build_mesh(&mut self, canvas_width: f32, canvas_height: f32) {
-        let current_settings = settings::get_settings();
-        let smoothed_points = crate::math::smooth_points(&self.points, current_settings.smoothing_level);
+    // AAA FIX: Settings are explicitly injected from the Tool's snapshot.
+    pub fn build_mesh(&mut self, base_thickness: f32, color: [f32; 4], smoothing: f32, canvas_width: f32, canvas_height: f32) {
+        let smoothed_points = crate::math::smooth_points(&self.points, smoothing);
         
-        // Calculate the Spatial Footprint (AABB) of this specific stroke
         let mut bounds = AABB::empty();
-        let max_radius = current_settings.brush_thickness / 2.0; 
+        let max_radius = base_thickness / 2.0; 
         for pt in &smoothed_points {
             bounds.expand_to_include(pt.x, pt.y, max_radius);
         }
@@ -57,8 +54,8 @@ impl Stroke {
 
         let (verts, inds) = Tessellator::extrude_stroke(
             &smoothed_points, 
-            current_settings.brush_thickness, 
-            current_settings.brush_color, 
+            base_thickness, 
+            color, 
             canvas_width, 
             canvas_height
         );

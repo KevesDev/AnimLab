@@ -8,20 +8,14 @@ export interface BrushPreferences {
 }
 
 interface PreferencesState {
-    // Global User Preferences
     brush: BrushPreferences;
     activeTool: InputAction;
-    
-    // The active memory pointer to the Rust WASM Engine
     engineInstance: any | null;
     
-    // Actions
     setBrushThickness: (thickness: number) => void;
     setBrushColor: (r: number, g: number, b: number, a: number) => void;
     setActiveTool: (tool: InputAction) => void;
     setEngineInstance: (engine: any) => void;
-    
-    // Pushes the current React state across the WASM bridge into Rust memory
     syncPreferencesToEngine: () => void;
 }
 
@@ -46,7 +40,23 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
 
     setActiveTool: (tool) => {
         set({ activeTool: tool });
-        // Future: This is where we will call engine.set_active_tool(tool) in Rust
+        
+        const { engineInstance } = get();
+        if (engineInstance && typeof engineInstance.set_active_tool === 'function') {
+            try {
+                // AAA SAFETY: The WASM Boundary Type-Guard.
+                // Rust &str requires a strictly allocated memory pointer. 
+                // Passing undefined or null will instantly panic the JS/WASM glue code.
+                if (typeof tool !== 'string' || !tool) {
+                    console.warn(`[WASM Bridge] Blocked corrupted payload. Expected string, received:`, tool);
+                    return;
+                }
+                
+                engineInstance.set_active_tool(tool);
+            } catch (error) {
+                console.error(`[WASM Bridge] FATAL ERROR during Tool Swap execution:`, error);
+            }
+        }
     },
 
     setEngineInstance: (engineInstance) => {
@@ -56,14 +66,18 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
 
     syncPreferencesToEngine: () => {
         const { engineInstance, brush } = get();
-        if (engineInstance) {
-            engineInstance.set_brush_settings(
-                brush.thickness,
-                brush.color[0],
-                brush.color[1],
-                brush.color[2],
-                brush.color[3]
-            );
+        if (engineInstance && typeof engineInstance.set_brush_settings === 'function') {
+            try {
+                engineInstance.set_brush_settings(
+                    brush.thickness,
+                    brush.color[0],
+                    brush.color[1],
+                    brush.color[2],
+                    brush.color[3]
+                );
+            } catch (error) {
+                console.error(`[WASM Bridge] FATAL ERROR during Settings Sync execution:`, error);
+            }
         }
     }
 }));

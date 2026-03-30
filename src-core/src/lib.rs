@@ -1,5 +1,6 @@
 use wasm_bindgen::prelude::*;
-use log::{info, error, Level};
+// AAA FIX: Added 'warn' to the macro imports
+use log::{info, warn, error, Level};
 use web_sys::HtmlCanvasElement;
 use wgpu::util::DeviceExt; 
 use std::collections::HashMap;
@@ -9,22 +10,21 @@ pub mod stroke;
 pub mod settings; 
 pub mod graph; 
 pub mod command; 
+pub mod tools; 
 
-use stroke::Stroke;
 use graph::AnimGraph;
-use command::{CommandHistory, AddStrokeCommand};
+use command::CommandHistory;
+use tools::{CanvasTool, brush::BrushTool};
 
 #[derive(Debug)]
 pub enum EngineError {
     LoggerInitFailed(String),
-    InputWithoutActiveStroke,
 }
 
 impl From<EngineError> for JsValue {
     fn from(err: EngineError) -> JsValue {
         match err {
             EngineError::LoggerInitFailed(msg) => JsValue::from_str(&format!("AnimLab Fatal: {}", msg)),
-            EngineError::InputWithoutActiveStroke => JsValue::from_str("AnimLab Math Error: Attempted to add points to a null stroke."),
         }
     }
 }
@@ -66,7 +66,8 @@ pub struct AnimLabEngine {
     pub quad_ib: Option<wgpu::Buffer>,
     
     #[wasm_bindgen(skip)]
-    pub active_stroke: Option<Stroke>,
+    pub active_tool: Box<dyn CanvasTool>,
+    
     #[wasm_bindgen(skip)]
     pub graph: AnimGraph,
     #[wasm_bindgen(skip)]
@@ -91,7 +92,7 @@ impl AnimLabEngine {
             raster_cache: HashMap::new(),
             quad_vb: None,
             quad_ib: None,
-            active_stroke: None,
+            active_tool: Box::new(BrushTool::new()), 
             graph: AnimGraph::new(),
             history: CommandHistory::new(),
         })
@@ -119,6 +120,18 @@ impl AnimLabEngine {
     pub fn trigger_redo(&mut self) { self.history.redo(&mut self.graph); }
 
     #[wasm_bindgen]
+    pub fn set_active_tool(&mut self, tool_name: &str) {
+        info!("Rust Engine processing Semantic Tool Swap: {}", tool_name);
+        match tool_name {
+            "ToolBrush" => self.active_tool = Box::new(BrushTool::new()),
+            _ => {
+                warn!("Tool [{}] requested but not fully implemented in Rust yet. Safely defaulting to Vector Brush.", tool_name);
+                self.active_tool = Box::new(BrushTool::new());
+            }
+        }
+    }
+
+    #[wasm_bindgen]
     pub async fn attach_canvas(&mut self, canvas: HtmlCanvasElement, physical_width: u32, physical_height: u32) -> Result<(), JsValue> {
         self.canvas_width = physical_width as f32;
         self.canvas_height = physical_height as f32;
@@ -143,7 +156,6 @@ impl AnimLabEngine {
             alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
         };
 
-        // 1. Compile Vector Pipeline
         let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("Vector Pipeline Layout"), bind_group_layouts: &[], immediate_size: 0 });
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Vector Pipeline"), layout: Some(&render_pipeline_layout),
@@ -153,7 +165,6 @@ impl AnimLabEngine {
             depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
         });
 
-        // 2. Compile Raster Pipeline
         let raster_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
                 wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None },
@@ -198,27 +209,23 @@ impl AnimLabEngine {
 
     #[wasm_bindgen]
     pub fn begin_stroke(&mut self, x: f32, y: f32, pressure: f32) -> Result<(), JsValue> {
-        self.active_stroke = Some(Stroke::new());
-        self.push_point(x, y, pressure)?;
+        let settings = settings::get_settings();
+        self.active_tool.on_pointer_down(x, y, pressure, settings);
         Ok(())
     }
 
     #[wasm_bindgen]
     pub fn push_point(&mut self, x: f32, y: f32, pressure: f32) -> Result<(), JsValue> {
-        if let Some(stroke) = &mut self.active_stroke {
-            stroke.add_point(x, y, pressure);
-            stroke.build_mesh(self.canvas_width, self.canvas_height);
-            Ok(())
-        } else { Err(EngineError::InputWithoutActiveStroke.into()) }
+        self.active_tool.on_pointer_move(x, y, pressure, &self.graph);
+        Ok(())
     }
 
     #[wasm_bindgen]
     pub fn end_stroke(&mut self) -> Result<(), JsValue> {
-        if let Some(mut stroke) = self.active_stroke.take() {
-            stroke.build_mesh(self.canvas_width, self.canvas_height);
-            let target_node_id = self.graph.active_layer_node.expect("Fatal Engine Error: Missing active layer.");
-            let stroke_id = self.history.generate_stroke_id();
-            let command = Box::new(AddStrokeCommand { target_node_id, stroke_id, stroke });
+        let target_node_id = self.graph.active_layer_node.expect("Fatal Engine Error: Missing active layer.");
+        let stroke_id = self.history.generate_stroke_id();
+        
+        if let Some(command) = self.active_tool.on_pointer_up(target_node_id, stroke_id, self.canvas_width, self.canvas_height, &self.graph) {
             self.history.push_and_execute(command, &mut self.graph);
         }
         Ok(())
@@ -228,12 +235,10 @@ impl AnimLabEngine {
     pub fn render(&mut self) {
         if let (Some(device), Some(queue), Some(surface), Some(bind_group_layout)) = (&self.device, &self.queue, &self.surface, &self.raster_bind_group_layout) {
             
-            // --- RESOURCE MANAGER SYNC ---
             for (node_id, node) in &mut self.graph.nodes {
                 if let graph::NodeType::RasterLayer { width, height, pixels, is_dirty } = &mut node.payload {
                     if *is_dirty && *width > 0 && *height > 0 {
                         let texture_size = wgpu::Extent3d { width: *width, height: *height, depth_or_array_layers: 1 };
-                        
                         let recreate = match self.raster_cache.get(node_id) {
                             Some((tex, _)) => tex.width() != *width || tex.height() != *height,
                             None => true,
@@ -247,7 +252,6 @@ impl AnimLabEngine {
                             });
 
                             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                            
                             let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
                                 address_mode_u: wgpu::AddressMode::ClampToEdge, address_mode_v: wgpu::AddressMode::ClampToEdge, address_mode_w: wgpu::AddressMode::ClampToEdge,
                                 mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, mipmap_filter: wgpu::MipmapFilterMode::Nearest, ..Default::default()
@@ -276,7 +280,6 @@ impl AnimLabEngine {
                 }
             }
 
-            // --- THE COMPOSITOR RENDER PASS ---
             let output = match surface.get_current_texture() { 
                 Ok(frame) => frame, Err(wgpu::SurfaceError::Outdated) => return, Err(e) => { error!("Surface error: {:?}", e); return; }
             };
@@ -291,7 +294,6 @@ impl AnimLabEngine {
                     })], depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, ..Default::default()
                 });
                 
-                // 1. Draw Raster Layers
                 if let (Some(raster_pipe), Some(quad_vb), Some(quad_ib)) = (&self.raster_pipeline, &self.quad_vb, &self.quad_ib) {
                     rp.set_pipeline(raster_pipe);
                     rp.set_vertex_buffer(0, quad_vb.slice(..));
@@ -307,19 +309,23 @@ impl AnimLabEngine {
                     }
                 }
 
-                // 2. Draw Vector Layers
                 if let Some(vector_pipe) = &self.render_pipeline {
                     rp.set_pipeline(vector_pipe);
-                    let mut draw = |stroke: &Stroke| {
-                        if stroke.vertices.is_empty() { return; }
-                        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("VB"), contents: bytemuck::cast_slice(&stroke.vertices), usage: wgpu::BufferUsages::VERTEX });
-                        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("IB"), contents: bytemuck::cast_slice(&stroke.indices), usage: wgpu::BufferUsages::INDEX });
-                        rp.set_vertex_buffer(0, vb.slice(..)); rp.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16); rp.draw_indexed(0..stroke.indices.len() as u32, 0, 0..1);
+                    
+                    let mut draw = |vertices: &[math::Vertex], indices: &[u16]| {
+                        if vertices.is_empty() { return; }
+                        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("VB"), contents: bytemuck::cast_slice(vertices), usage: wgpu::BufferUsages::VERTEX });
+                        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("IB"), contents: bytemuck::cast_slice(indices), usage: wgpu::BufferUsages::INDEX });
+                        rp.set_vertex_buffer(0, vb.slice(..)); 
+                        rp.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16); 
+                        rp.draw_indexed(0..indices.len() as u32, 0, 0..1);
                     };
                     
                     let render_list = self.graph.collect_renderable_strokes();
-                    for s in render_list { draw(s); }
-                    if let Some(s) = &self.active_stroke { draw(s); }
+                    for s in render_list { draw(&s.vertices, &s.indices); }
+                    
+                    let (preview_verts, preview_inds) = self.active_tool.get_preview_mesh(self.canvas_width, self.canvas_height);
+                    draw(&preview_verts, &preview_inds);
                 }
             }
             queue.submit(std::iter::once(encoder.finish()));
