@@ -1,39 +1,49 @@
 use crate::tools::CanvasTool;
-use crate::geometry::{Point, ContourStroke, VectorElement};
-use crate::geometry::spline::smooth_spline;
-use crate::geometry::tessellator::Extruder;
 use crate::settings::EngineSettings;
-use crate::graph::{AnimGraph, NodeId, IdAllocator};
+use crate::graph::{SceneManager, IdAllocator};
 use crate::command::{Command, AddStrokeCommand};
+use crate::geometry::tessellator::Extruder;
+use crate::geometry::{Point, ContourStroke, VectorElement};
 use crate::math::Vertex;
+use geo::LineString;
 
-pub struct BrushTool { raw_points: Vec<Point>, settings_snapshot: Option<EngineSettings> }
-impl BrushTool { pub fn new() -> Self { Self { raw_points: Vec::with_capacity(256), settings_snapshot: None } } }
+pub struct BrushTool { points: Vec<Point>, active_thickness: f32, active_color: [f32; 4] }
+
+impl BrushTool { pub fn new() -> Self { Self { points: Vec::with_capacity(1024), active_thickness: 10.0, active_color: [1.0, 1.0, 1.0, 1.0] } } }
 
 impl CanvasTool for BrushTool {
-    fn on_pointer_down(&mut self, x: f32, y: f32, pressure: f32, _constrain: bool, _center: bool, settings: EngineSettings, _active_node_id: NodeId, _graph: &mut AnimGraph) {
-        self.settings_snapshot = Some(settings); self.raw_points.clear();
-        let pt = Point { x, y, pressure }; if pt.is_valid() { self.raw_points.push(pt); }
+    fn on_pointer_down(&mut self, x: f32, y: f32, pressure: f32, _constrain: bool, _center: bool, settings: EngineSettings, _scene: &mut SceneManager, _id_allocator: &mut IdAllocator) {
+        self.points.clear(); self.active_thickness = settings.brush_thickness; self.active_color = settings.brush_color;
+        let pt = Point { x, y, pressure }; if pt.is_valid() { self.points.push(pt); }
     }
-    fn on_pointer_move(&mut self, x: f32, y: f32, pressure: f32, _constrain: bool, _center: bool, _active_node_id: NodeId, _graph: &mut AnimGraph, _canvas_width: f32, _canvas_height: f32) {
-        let pt = Point { x, y, pressure }; if pt.is_valid() { self.raw_points.push(pt); }
+    fn on_pointer_move(&mut self, x: f32, y: f32, pressure: f32, _constrain: bool, _center: bool, _scene: &mut SceneManager, _cw: f32, _ch: f32) {
+        let pt = Point { x, y, pressure }; if pt.is_valid() { self.points.push(pt); }
     }
-    fn on_pointer_up(&mut self, active_node_id: NodeId, id_allocator: &mut IdAllocator, canvas_width: f32, canvas_height: f32, _graph: &mut AnimGraph) -> Option<Box<dyn Command>> {
-        if let Some(settings) = self.settings_snapshot.take() {
-            if self.raw_points.len() < 2 { return None; }
-            let smoothed = smooth_spline(&self.raw_points, settings.smoothing_level);
-            let (shape, vertices, indices, aabb) = Extruder::extrude_contour(&smoothed, settings.brush_thickness, settings.brush_color, canvas_width, canvas_height);
-            let contour = ContourStroke { shape, color: settings.brush_color, vertices, indices, aabb, eraser_masks: Vec::new(), clip_masks: Vec::new() };
-            self.raw_points.clear();
-            Some(Box::new(AddStrokeCommand { target_node_id: active_node_id, stroke_id: id_allocator.generate(), element: VectorElement::Contour(contour) }))
-        } else { None }
+    fn on_pointer_up(&mut self, id_allocator: &mut IdAllocator, cw: f32, ch: f32, scene: &mut SceneManager) -> Option<Box<dyn Command>> {
+        if self.points.len() < 2 { self.points.clear(); return None; }
+        
+        let settings = crate::settings::get_settings();
+        let stroke_id = id_allocator.generate();
+        
+        // AAA INTEGRITY RESTORED: Utilizing your original smoothing pipeline
+        let smoothed_points = crate::geometry::spline::smooth_spline(&self.points, settings.smoothing_level);
+        let (vertices, indices, aabb) = Extruder::extrude_centerline(&smoothed_points, self.active_thickness, self.active_color, cw, ch);
+        let coords: Vec<geo::Coord<f32>> = smoothed_points.iter().map(|p| geo::coord!{ x: p.x, y: p.y }).collect();
+        let shape = geo::MultiPolygon::new(vec![geo::Polygon::new(LineString(coords), vec![])]);
+        
+        let element = VectorElement::Contour(ContourStroke { shape, color: self.active_color, vertices, indices, aabb, eraser_masks: Vec::new(), clip_masks: Vec::new() });
+        self.points.clear();
+
+        let element_id = scene.active_element_id.unwrap_or(1);
+        let drawing_id = *scene.elements.get(&element_id).unwrap().exposures.get(&scene.current_frame).unwrap_or(&1);
+        
+        Some(Box::new(AddStrokeCommand { element_id, drawing_id, art_layer: scene.active_art_layer, stroke_id, element }))
     }
-    fn get_preview_mesh(&self, canvas_width: f32, canvas_height: f32) -> (Vec<Vertex>, Vec<u16>) {
-        if let Some(settings) = &self.settings_snapshot {
-            if self.raw_points.len() < 2 { return (Vec::new(), Vec::new()); }
-            let smoothed = smooth_spline(&self.raw_points, settings.smoothing_level);
-            let (_, verts, inds, _) = Extruder::extrude_contour(&smoothed, settings.brush_thickness, settings.brush_color, canvas_width, canvas_height);
-            (verts, inds)
-        } else { (Vec::new(), Vec::new()) }
+    fn get_preview_mesh(&self, cw: f32, ch: f32) -> (Vec<Vertex>, Vec<u16>) {
+        if self.points.len() < 2 { return (Vec::new(), Vec::new()); }
+        let settings = crate::settings::get_settings();
+        let smoothed_points = crate::geometry::spline::smooth_spline(&self.points, settings.smoothing_level);
+        let (verts, inds, _) = Extruder::extrude_centerline(&smoothed_points, self.active_thickness, self.active_color, cw, ch);
+        (verts, inds)
     }
 }

@@ -102,11 +102,9 @@ impl BooleanSlicer {
                 let (lasso_verts, lasso_inds) = Extruder::tessellate_lasso(lasso_points, canvas_width, canvas_height);
                 let lasso_mask = EraserMask { shape: lasso_multi_f32.clone(), vertices: lasso_verts, indices: lasso_inds };
 
-                // 1. The Outside (Lasso acts as an Eraser)
                 let mut outside_contour = contour.clone();
                 outside_contour.eraser_masks.push(lasso_mask.clone());
 
-                // AAA FIX: Project GPU coordinates back to screen space to find the exact visible bounds of the Outer piece
                 let mut outside_aabb = AABB::empty();
                 for v in &outside_contour.vertices {
                     let px = (v.position[0] + 1.0) / 2.0 * canvas_width;
@@ -117,11 +115,9 @@ impl BooleanSlicer {
                 }
                 outside_contour.aabb = outside_aabb;
 
-                // 2. The Inside (Lasso acts as a Clip Mask)
                 let mut inside_contour = contour.clone();
                 inside_contour.clip_masks.push(lasso_mask);
 
-                // AAA FIX: Project GPU coordinates back to screen space to find the exact visible bounds of the Inner piece
                 let mut inside_aabb = AABB::empty();
                 for v in &inside_contour.vertices {
                     let px = (v.position[0] + 1.0) / 2.0 * canvas_width;
@@ -179,4 +175,42 @@ impl BooleanSlicer {
             }
         }
     }
+
+    // AAA RESTORED: Appended inside the BooleanSlicer impl block as required by graph.rs
+    pub fn is_point_in_polygon(x: f32, y: f32, polygon: &[Point]) -> bool {
+        let mut inside = false;
+        let mut j = polygon.len() - 1;
+        for i in 0..polygon.len() {
+            let pi = &polygon[i];
+            let pj = &polygon[j];
+            if (pi.y > y) != (pj.y > y) && x < (pj.x - pi.x) * (y - pi.y) / (pj.y - pi.y) + pi.x {
+                inside = !inside;
+            }
+            j = i;
+        }
+        inside
+    }
+}
+
+// AAA RESTORED: Appended outside the impl block as required by cutter.rs
+pub fn create_boolean_mask(lasso_points: &[Point], canvas_width: f32, canvas_height: f32) -> EraserMask {
+    let mut coords = Vec::new();
+    for pt in lasso_points { coords.push(Coord { x: pt.x as f64, y: pt.y as f64 }); }
+    if !coords.is_empty() { coords.push(coords[0]); } 
+    
+    let shape = MultiPolygon::new(vec![Polygon::new(LineString::new(coords), vec![])])
+        .map_coords(|c| Coord { x: c.x as f32, y: c.y as f32 });
+        
+    let (vertices, indices) = Extruder::tessellate_lasso(lasso_points, canvas_width, canvas_height);
+    EraserMask { shape, vertices, indices }
+}
+
+pub fn recalculate_aabb(contour: &mut ContourStroke) {
+    let mut new_aabb = AABB::empty();
+    for poly in &contour.shape {
+        for pt in poly.exterior().0.iter() {
+            new_aabb.expand_to_include(pt.x, pt.y, 0.0);
+        }
+    }
+    contour.aabb = if new_aabb.min_x <= new_aabb.max_x { new_aabb } else { AABB::empty() };
 }
