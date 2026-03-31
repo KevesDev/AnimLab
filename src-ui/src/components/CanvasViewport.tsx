@@ -1,126 +1,150 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import init_core, { AnimLabEngine } from 'animlab-core';
 import { usePreferencesStore } from '../store/PreferencesStore';
 
-// AAA FIX: Changed to a named export to match App.tsx
 export const CanvasViewport: React.FC = () => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const [isBooting, setIsBooting] = useState(true);
+    
+    const setEngineInstance = usePreferencesStore(state => state.setEngineInstance);
     const engineRef = useRef<any>(null);
-
-    const activeTool = usePreferencesStore((state) => state.activeTool);
-    const brushColor = usePreferencesStore((state) => state.brushColor);
-    const brushSize = usePreferencesStore((state) => state.brushSize);
+    const animationFrameId = useRef<number>(0);
+    const resizeTimeoutRef = useRef<number | null>(null);
 
     useEffect(() => {
         let isMounted = true;
 
-        const initEngine = async () => {
-            if (!canvasRef.current || !containerRef.current) return;
-            
+        const bootEngine = async () => {
             try {
-                const wasm = await import('animlab-core');
-                await wasm.default();
+                await init_core();
+                if (!isMounted || !canvasRef.current || !containerRef.current) return;
+
+                const engine = new AnimLabEngine();
+                engineRef.current = engine;
                 
-                if (isMounted && !engineRef.current) {
-                    const engine = new wasm.AnimLabEngine();
-                    
-                    const rect = containerRef.current.getBoundingClientRect();
-                    canvasRef.current.width = rect.width;
-                    canvasRef.current.height = rect.height;
-                    
-                    await engine.attach_canvas(canvasRef.current, rect.width, rect.height);
-                    engine.set_active_tool(activeTool);
-                    engine.set_brush_settings(brushSize, brushColor.r / 255, brushColor.g / 255, brushColor.b / 255, brushColor.a);
-                    
-                    engineRef.current = engine;
-                    
-                    const renderLoop = () => {
-                        if (isMounted && engineRef.current) {
-                            engineRef.current.render();
-                            requestAnimationFrame(renderLoop);
-                        }
-                    };
-                    requestAnimationFrame(renderLoop);
-                }
-            } catch (err) {
-                console.error("Failed to initialize AnimLab Engine:", err);
-            }
-        };
-
-        initEngine();
-
-        const handleResize = () => {
-            if (containerRef.current && canvasRef.current && engineRef.current) {
+                // Calculate actual hardware pixels (supports 4K and Retina Displays)
+                const dpr = window.devicePixelRatio || 1;
                 const rect = containerRef.current.getBoundingClientRect();
-                canvasRef.current.width = rect.width;
-                canvasRef.current.height = rect.height;
-                engineRef.current.resize_surface(rect.width, rect.height);
+                const physicalWidth = Math.max(1, Math.floor(rect.width * dpr));
+                const physicalHeight = Math.max(1, Math.floor(rect.height * dpr));
+
+                // Force the HTML canvas to hold the physical pixel count
+                canvasRef.current.width = physicalWidth;
+                canvasRef.current.height = physicalHeight;
+
+                await engine.attach_canvas(canvasRef.current, physicalWidth, physicalHeight);
+                
+                setEngineInstance(engine);
+                setIsBooting(false);
+
+                const renderLoop = () => {
+                    if (engineRef.current) { engineRef.current.render(); }
+                    animationFrameId.current = requestAnimationFrame(renderLoop);
+                };
+                renderLoop();
+
+            } catch (err) {
+                console.error("AnimLab Fatal Graphics Error:", err);
             }
         };
 
-        window.addEventListener('resize', handleResize);
+        bootEngine();
+
+        // AAA FIX: Hardware Swapchain Resize Observer
+        const resizeObserver = new ResizeObserver((entries) => {
+            if (!engineRef.current || !canvasRef.current) return;
+            
+            for (let entry of entries) {
+                // Debounce the resize to prevent GPU Swapchain Exhaustion during UI dragging
+                if (resizeTimeoutRef.current) window.clearTimeout(resizeTimeoutRef.current);
+                
+                resizeTimeoutRef.current = window.setTimeout(() => {
+                    const rect = entry.target.getBoundingClientRect();
+                    const dpr = window.devicePixelRatio || 1;
+                    const pWidth = Math.max(1, Math.floor(rect.width * dpr));
+                    const pHeight = Math.max(1, Math.floor(rect.height * dpr));
+
+                    if (canvasRef.current && (canvasRef.current.width !== pWidth || canvasRef.current.height !== pHeight)) {
+                        canvasRef.current.width = pWidth;
+                        canvasRef.current.height = pHeight;
+                        engineRef.current.resize_surface(pWidth, pHeight);
+                    }
+                }, 100); // Wait 100ms for layout to settle before reallocating VRAM
+            }
+        });
+
+        if (containerRef.current) resizeObserver.observe(containerRef.current);
 
         return () => {
             isMounted = false;
-            window.removeEventListener('resize', handleResize);
+            cancelAnimationFrame(animationFrameId.current);
+            if (resizeTimeoutRef.current) window.clearTimeout(resizeTimeoutRef.current);
+            resizeObserver.disconnect();
             if (engineRef.current) {
                 engineRef.current.free();
-                engineRef.current = null;
+                setEngineInstance(null);
             }
         };
-    }, []);
+    }, [setEngineInstance]);
 
-    useEffect(() => {
-        if (engineRef.current) { engineRef.current.set_active_tool(activeTool); }
-    }, [activeTool]);
-
-    useEffect(() => {
-        if (engineRef.current) {
-            engineRef.current.set_brush_settings(brushSize, brushColor.r / 255, brushColor.g / 255, brushColor.b / 255, brushColor.a);
-        }
-    }, [brushColor, brushSize]);
-
+    // --- HARDWARE INPUT ROUTING ---
     const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (!engineRef.current || !canvasRef.current) return;
-        const rect = canvasRef.current.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        const pressure = e.pointerType === 'pen' ? e.pressure : 1.0;
         canvasRef.current.setPointerCapture(e.pointerId);
+        
+        const rect = canvasRef.current.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        
+        // AAA FIX: Multiply CSS coordinates by the DPI to hit the exact hardware pixel
+        const x = (e.clientX - rect.left) * dpr;
+        const y = (e.clientY - rect.top) * dpr;
+        const pressure = e.pressure !== 0 ? e.pressure : 1.0;
+        
         engineRef.current.begin_stroke(x, y, pressure);
     };
 
     const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (!engineRef.current || !canvasRef.current) return;
-        const rect = canvasRef.current.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
         
+        const rect = canvasRef.current.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        
+        const x = (e.clientX - rect.left) * dpr;
+        const y = (e.clientY - rect.top) * dpr;
+        const pressure = e.pressure !== 0 ? e.pressure : 1.0;
+        
+        // AAA FEATURE INJECTION: If no buttons are pressed, send hover data for contextual cursors.
+        // Otherwise, if the canvas has captured the pointer (a drag is active), push stroke points.
         if (e.buttons === 0) {
             engineRef.current.hover(x, y);
-        } else {
-            const pressure = e.pointerType === 'pen' ? e.pressure : 1.0;
+        } else if (canvasRef.current.hasPointerCapture(e.pointerId)) {
             engineRef.current.push_point(x, y, pressure);
         }
     };
 
     const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-        if (!engineRef.current || !canvasRef.current) return;
+        if (!engineRef.current || !canvasRef.current || !canvasRef.current.hasPointerCapture(e.pointerId)) return;
         canvasRef.current.releasePointerCapture(e.pointerId);
+        
         engineRef.current.end_stroke();
     };
 
     return (
-        <div ref={containerRef} className="flex-1 w-full h-full relative overflow-hidden bg-[#14161a]">
+        <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden', backgroundColor: '#141517' }}>
+            {isBooting && (
+                <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: '#888', fontFamily: 'sans-serif' }}>
+                    Initializing WebGPU Pipeline...
+                </div>
+            )}
             <canvas
                 ref={canvasRef}
-                className="absolute top-0 left-0 w-full h-full touch-none"
+                style={{ display: 'block', width: '100%', height: '100%', touchAction: 'none' }}
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 onPointerCancel={handlePointerUp}
                 onPointerLeave={handlePointerUp}
-                onContextMenu={(e) => e.preventDefault()}
             />
         </div>
     );
