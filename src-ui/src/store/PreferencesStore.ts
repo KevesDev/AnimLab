@@ -12,10 +12,15 @@ interface PreferencesState {
     activeTool: InputAction;
     engineInstance: any | null;
     
+    // AAA ARCHITECTURE: Configurable Modifiers
+    modifierBindings: { constrain: string; center: string };
+    modifiers: { constrain: boolean; center: boolean };
+    
     setBrushThickness: (thickness: number) => void;
     setBrushColor: (r: number, g: number, b: number, a: number) => void;
     setActiveTool: (tool: InputAction) => void;
     setEngineInstance: (engine: any) => void;
+    setModifier: (modName: 'constrain' | 'center', isActive: boolean) => void;
     syncPreferencesToEngine: () => void;
 }
 
@@ -27,6 +32,9 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     },
     activeTool: InputAction.ToolBrush,
     engineInstance: null,
+    
+    modifierBindings: { constrain: 'Shift', center: 'Alt' },
+    modifiers: { constrain: false, center: false },
 
     setBrushThickness: (thickness) => {
         set((state) => ({ brush: { ...state.brush, thickness } }));
@@ -44,14 +52,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
         const { engineInstance } = get();
         if (engineInstance && typeof engineInstance.set_active_tool === 'function') {
             try {
-                // AAA SAFETY: The WASM Boundary Type-Guard.
-                // Rust &str requires a strictly allocated memory pointer. 
-                // Passing undefined or null will instantly panic the JS/WASM glue code.
-                if (typeof tool !== 'string' || !tool) {
-                    console.warn(`[WASM Bridge] Blocked corrupted payload. Expected string, received:`, tool);
-                    return;
-                }
-                
+                if (typeof tool !== 'string' || !tool) return;
                 engineInstance.set_active_tool(tool);
             } catch (error) {
                 console.error(`[WASM Bridge] FATAL ERROR during Tool Swap execution:`, error);
@@ -63,6 +64,10 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
         set({ engineInstance });
         get().syncPreferencesToEngine();
     },
+    
+    setModifier: (modName, isActive) => {
+        set((state) => ({ modifiers: { ...state.modifiers, [modName]: isActive } }));
+    },
 
     syncPreferencesToEngine: () => {
         const { engineInstance, brush } = get();
@@ -70,10 +75,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
             try {
                 engineInstance.set_brush_settings(
                     brush.thickness,
-                    brush.color[0],
-                    brush.color[1],
-                    brush.color[2],
-                    brush.color[3]
+                    brush.color[0], brush.color[1], brush.color[2], brush.color[3]
                 );
             } catch (error) {
                 console.error(`[WASM Bridge] FATAL ERROR during Settings Sync execution:`, error);

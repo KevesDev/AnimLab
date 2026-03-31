@@ -20,24 +20,22 @@ impl CutterTool {
 }
 
 impl CanvasTool for CutterTool {
-    fn on_pointer_down(&mut self, x: f32, y: f32, pressure: f32, _settings: EngineSettings, active_node_id: NodeId, graph: &mut AnimGraph) {
+    fn on_pointer_down(&mut self, x: f32, y: f32, pressure: f32, _constrain: bool, _center: bool, _settings: EngineSettings, active_node_id: NodeId, graph: &mut AnimGraph) {
         if let Some(id) = graph.hit_test(active_node_id, x, y) {
             if graph.selected_strokes.contains(&id) {
-                // User clicked an existing selection to move it
                 self.is_dragging = true;
                 self.last_x = x; self.last_y = y;
                 self.total_dx = 0.0; self.total_dy = 0.0;
                 return;
             }
         }
-        // User clicked dead space or a new area to initiate a fresh cut
         graph.selected_strokes.clear();
         self.is_dragging = false;
         self.raw_points.clear();
         let pt = Point { x, y, pressure }; if pt.is_valid() { self.raw_points.push(pt); }
     }
     
-    fn on_pointer_move(&mut self, x: f32, y: f32, pressure: f32, active_node_id: NodeId, graph: &mut AnimGraph, canvas_width: f32, canvas_height: f32) {
+    fn on_pointer_move(&mut self, x: f32, y: f32, pressure: f32, _constrain: bool, _center: bool, active_node_id: NodeId, graph: &mut AnimGraph, canvas_width: f32, canvas_height: f32) {
         if self.is_dragging {
             let dx = x - self.last_x; let dy = y - self.last_y;
             self.total_dx += dx; self.total_dy += dy;
@@ -91,7 +89,7 @@ impl CanvasTool for CutterTool {
                         
                         for frag in inside_frags { 
                             let new_id = id_allocator.generate();
-                            graph.selected_strokes.insert(new_id); // AAA Auto-Select Behavior!
+                            graph.selected_strokes.insert(new_id); 
                             new_fragments_with_ids.push((new_id, frag)); 
                         }
                         for frag in outside_frags { 

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import init_core, { AnimLabEngine } from 'animlab-core';
 import { usePreferencesStore } from '../store/PreferencesStore';
+import { GlobalInputManager } from '../engine_bridge/InputManager';
 
 export const CanvasViewport: React.FC = () => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -23,19 +24,21 @@ export const CanvasViewport: React.FC = () => {
                 const engine = new AnimLabEngine();
                 engineRef.current = engine;
                 
-                // Calculate actual hardware pixels (supports 4K and Retina Displays)
                 const dpr = window.devicePixelRatio || 1;
                 const rect = containerRef.current.getBoundingClientRect();
                 const physicalWidth = Math.max(1, Math.floor(rect.width * dpr));
                 const physicalHeight = Math.max(1, Math.floor(rect.height * dpr));
 
-                // Force the HTML canvas to hold the physical pixel count
                 canvasRef.current.width = physicalWidth;
                 canvasRef.current.height = physicalHeight;
 
                 await engine.attach_canvas(canvasRef.current, physicalWidth, physicalHeight);
                 
                 setEngineInstance(engine);
+                
+                // AAA ARCHITECTURE: Hand the canvas over to the Global Input Manager natively.
+                GlobalInputManager.getInstance().attachCanvas(canvasRef.current);
+                
                 setIsBooting(false);
 
                 const renderLoop = () => {
@@ -51,12 +54,10 @@ export const CanvasViewport: React.FC = () => {
 
         bootEngine();
 
-        // AAA FIX: Hardware Swapchain Resize Observer
         const resizeObserver = new ResizeObserver((entries) => {
             if (!engineRef.current || !canvasRef.current) return;
             
             for (let entry of entries) {
-                // Debounce the resize to prevent GPU Swapchain Exhaustion during UI dragging
                 if (resizeTimeoutRef.current) window.clearTimeout(resizeTimeoutRef.current);
                 
                 resizeTimeoutRef.current = window.setTimeout(() => {
@@ -70,7 +71,7 @@ export const CanvasViewport: React.FC = () => {
                         canvasRef.current.height = pHeight;
                         engineRef.current.resize_surface(pWidth, pHeight);
                     }
-                }, 100); // Wait 100ms for layout to settle before reallocating VRAM
+                }, 100); 
             }
         });
 
@@ -81,54 +82,16 @@ export const CanvasViewport: React.FC = () => {
             cancelAnimationFrame(animationFrameId.current);
             if (resizeTimeoutRef.current) window.clearTimeout(resizeTimeoutRef.current);
             resizeObserver.disconnect();
+            
+            // Clean up the native DOM event hooks
+            GlobalInputManager.getInstance().detachCanvas();
+            
             if (engineRef.current) {
                 engineRef.current.free();
                 setEngineInstance(null);
             }
         };
     }, [setEngineInstance]);
-
-    // --- HARDWARE INPUT ROUTING ---
-    const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-        if (!engineRef.current || !canvasRef.current) return;
-        canvasRef.current.setPointerCapture(e.pointerId);
-        
-        const rect = canvasRef.current.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
-        
-        // AAA FIX: Multiply CSS coordinates by the DPI to hit the exact hardware pixel
-        const x = (e.clientX - rect.left) * dpr;
-        const y = (e.clientY - rect.top) * dpr;
-        const pressure = e.pressure !== 0 ? e.pressure : 1.0;
-        
-        engineRef.current.begin_stroke(x, y, pressure);
-    };
-
-    const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-        if (!engineRef.current || !canvasRef.current) return;
-        
-        const rect = canvasRef.current.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
-        
-        const x = (e.clientX - rect.left) * dpr;
-        const y = (e.clientY - rect.top) * dpr;
-        const pressure = e.pressure !== 0 ? e.pressure : 1.0;
-        
-        // AAA FEATURE INJECTION: If no buttons are pressed, send hover data for contextual cursors.
-        // Otherwise, if the canvas has captured the pointer (a drag is active), push stroke points.
-        if (e.buttons === 0) {
-            engineRef.current.hover(x, y);
-        } else if (canvasRef.current.hasPointerCapture(e.pointerId)) {
-            engineRef.current.push_point(x, y, pressure);
-        }
-    };
-
-    const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-        if (!engineRef.current || !canvasRef.current || !canvasRef.current.hasPointerCapture(e.pointerId)) return;
-        canvasRef.current.releasePointerCapture(e.pointerId);
-        
-        engineRef.current.end_stroke();
-    };
 
     return (
         <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden', backgroundColor: '#141517' }}>
@@ -137,14 +100,10 @@ export const CanvasViewport: React.FC = () => {
                     Initializing WebGPU Pipeline...
                 </div>
             )}
+            {/* The React Component is now completely "dumb". No pointer events are bound here. */}
             <canvas
                 ref={canvasRef}
                 style={{ display: 'block', width: '100%', height: '100%', touchAction: 'none' }}
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onPointerCancel={handlePointerUp}
-                onPointerLeave={handlePointerUp}
             />
         </div>
     );

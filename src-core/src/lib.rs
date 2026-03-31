@@ -148,30 +148,49 @@ impl AnimLabEngine {
             multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
         });
 
+        // AAA FIX: Stencil States updated to act on BOTH Front and Back faces
+        let stencil_write_face = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Replace,
+            depth_fail_op: wgpu::StencilOperation::Replace,
+            pass_op: wgpu::StencilOperation::Replace
+        };
         let stencil_write_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Stencil Write Pipeline"), layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"), buffers: &[math::Vertex::desc()], compilation_options: Default::default() },
             fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_main"), targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(blend_state_normal), write_mask: wgpu::ColorWrites::empty() })], compilation_options: Default::default() }),
             primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, strip_index_format: None, front_face: wgpu::FrontFace::Ccw, cull_mode: None, unclipped_depth: false, polygon_mode: wgpu::PolygonMode::Fill, conservative: false },
-            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth24PlusStencil8, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: wgpu::StencilState { front: wgpu::StencilFaceState { compare: wgpu::CompareFunction::Always, fail_op: wgpu::StencilOperation::Replace, depth_fail_op: wgpu::StencilOperation::Replace, pass_op: wgpu::StencilOperation::Replace }, back: wgpu::StencilFaceState::default(), read_mask: !0, write_mask: !0 }, bias: wgpu::DepthBiasState::default() }),
+            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth24PlusStencil8, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: wgpu::StencilState { front: stencil_write_face.clone(), back: stencil_write_face, read_mask: !0, write_mask: !0 }, bias: wgpu::DepthBiasState::default() }),
             multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
         });
 
+        let stencil_read_0_face = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep
+        };
         let stencil_read_0_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Stencil Read 0 Pipeline"), layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"), buffers: &[math::Vertex::desc()], compilation_options: Default::default() },
             fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_main"), targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(blend_state_normal), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
             primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, strip_index_format: None, front_face: wgpu::FrontFace::Ccw, cull_mode: None, unclipped_depth: false, polygon_mode: wgpu::PolygonMode::Fill, conservative: false },
-            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth24PlusStencil8, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: wgpu::StencilState { front: wgpu::StencilFaceState { compare: wgpu::CompareFunction::Equal, fail_op: wgpu::StencilOperation::Keep, depth_fail_op: wgpu::StencilOperation::Keep, pass_op: wgpu::StencilOperation::Keep }, back: wgpu::StencilFaceState::default(), read_mask: !0, write_mask: 0 }, bias: wgpu::DepthBiasState::default() }),
+            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth24PlusStencil8, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: wgpu::StencilState { front: stencil_read_0_face.clone(), back: stencil_read_0_face, read_mask: !0, write_mask: 0 }, bias: wgpu::DepthBiasState::default() }),
             multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
         });
 
+        let stencil_read_1_face = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep
+        };
         let stencil_read_1_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Stencil Read 1 Pipeline"), layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"), buffers: &[math::Vertex::desc()], compilation_options: Default::default() },
             fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_main"), targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(blend_state_normal), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
             primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, strip_index_format: None, front_face: wgpu::FrontFace::Ccw, cull_mode: None, unclipped_depth: false, polygon_mode: wgpu::PolygonMode::Fill, conservative: false },
-            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth24PlusStencil8, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: wgpu::StencilState { front: wgpu::StencilFaceState { compare: wgpu::CompareFunction::Equal, fail_op: wgpu::StencilOperation::Keep, depth_fail_op: wgpu::StencilOperation::Keep, pass_op: wgpu::StencilOperation::Keep }, back: wgpu::StencilFaceState::default(), read_mask: !0, write_mask: 0 }, bias: wgpu::DepthBiasState::default() }),
+            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth24PlusStencil8, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: wgpu::StencilState { front: stencil_read_1_face.clone(), back: stencil_read_1_face, read_mask: !0, write_mask: 0 }, bias: wgpu::DepthBiasState::default() }),
             multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
         });
 
@@ -206,26 +225,26 @@ impl AnimLabEngine {
         }
     }
 
-    #[wasm_bindgen] pub fn hover(&mut self, x: f32, y: f32) -> Result<(), JsValue> {
+    #[wasm_bindgen] pub fn hover(&mut self, x: f32, y: f32, constrain: bool, center: bool) -> Result<(), JsValue> {
         let active_node_id = self.graph.active_layer_node.expect("Fatal Engine Error: Missing active layer.");
         let tool = &mut self.active_tool;
         let graph = &mut self.graph;
         
         let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            tool.on_pointer_hover(x, y, active_node_id, graph);
+            tool.on_pointer_hover(x, y, constrain, center, active_node_id, graph);
         })).unwrap_or_else(|_| {});
         Ok(())
     }
 
-    #[wasm_bindgen] pub fn begin_stroke(&mut self, x: f32, y: f32, pressure: f32) -> Result<(), JsValue> { 
+    #[wasm_bindgen] pub fn begin_stroke(&mut self, x: f32, y: f32, pressure: f32, constrain: bool, center: bool) -> Result<(), JsValue> { 
         let settings = settings::get_settings(); 
         let active_node_id = self.graph.active_layer_node.expect("Fatal Engine Error: Missing active layer.");
-        self.active_tool.on_pointer_down(x, y, pressure, settings, active_node_id, &mut self.graph); 
+        self.active_tool.on_pointer_down(x, y, pressure, constrain, center, settings, active_node_id, &mut self.graph); 
         let cursor = self.active_tool.get_cursor(); self.cursor_manager.apply(cursor);
         Ok(()) 
     }
     
-    #[wasm_bindgen] pub fn push_point(&mut self, x: f32, y: f32, pressure: f32) -> Result<(), JsValue> {
+    #[wasm_bindgen] pub fn push_point(&mut self, x: f32, y: f32, pressure: f32, constrain: bool, center: bool) -> Result<(), JsValue> {
         let active_node_id = self.graph.active_layer_node.expect("Fatal Engine Error: Missing active layer.");
         let canvas_w = self.canvas_width;
         let canvas_h = self.canvas_height;
@@ -233,7 +252,7 @@ impl AnimLabEngine {
         let graph = &mut self.graph;
 
         let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            tool.on_pointer_move(x, y, pressure, active_node_id, graph, canvas_w, canvas_h);
+            tool.on_pointer_move(x, y, pressure, constrain, center, active_node_id, graph, canvas_w, canvas_h);
         })).unwrap_or_else(|_| { error!("AAA Safety Net: Handled math panic in push_point."); });
         
         let cursor = self.active_tool.get_cursor(); self.cursor_manager.apply(cursor);
@@ -379,11 +398,18 @@ impl AnimLabEngine {
                             add_quad(hx - hs, hy - hs, hs * 2.0, hs * 2.0, [1.0, 1.0, 1.0, 1.0]); 
                         }
 
+                        let (px, py) = self.active_tool.get_custom_pivot().unwrap_or((
+                            aabb.min_x + (aabb.max_x - aabb.min_x) / 2.0,
+                            aabb.min_y + (aabb.max_y - aabb.min_y) / 2.0
+                        ));
+                        
+                        add_quad(px - 5.0, py - 5.0, 10.0, 10.0, [0.0, 0.6, 1.0, 1.0]); 
+                        add_quad(px - 2.0, py - 2.0, 4.0, 4.0, [1.0, 1.0, 1.0, 1.0]);   
+
                         rp.set_pipeline(standard_pipe);
                         draw(&mut rp, &bb_verts, &bb_inds);
                     }
 
-                    // AAA FIX: Shield the 144hz loop from tool-preview panics
                     let preview_mesh_result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                         self.active_tool.get_preview_mesh(self.canvas_width, self.canvas_height)
                     }));

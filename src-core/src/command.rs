@@ -53,6 +53,29 @@ impl Command for TransformCommand {
     }
 }
 
+// AAA ARCHITECTURE: 100% Float-Drift-Proof Affine History state
+pub struct AffineCommand {
+    pub target_node_id: NodeId,
+    pub old_elements: Vec<(StrokeId, VectorElement)>,
+    pub new_elements: Vec<(StrokeId, VectorElement)>,
+}
+impl Command for AffineCommand {
+    fn execute(&self, graph: &mut AnimGraph, _: f32, _: f32) {
+        if let Some(node) = graph.nodes.get_mut(&self.target_node_id) {
+            if let crate::graph::NodeType::VectorLayer { elements, .. } = &mut node.payload {
+                for (id, el) in &self.new_elements { elements.insert(*id, el.clone()); }
+            }
+        }
+    }
+    fn undo(&self, graph: &mut AnimGraph, _: f32, _: f32) {
+        if let Some(node) = graph.nodes.get_mut(&self.target_node_id) {
+            if let crate::graph::NodeType::VectorLayer { elements, .. } = &mut node.payload {
+                for (id, el) in &self.old_elements { elements.insert(*id, el.clone()); }
+            }
+        }
+    }
+}
+
 pub struct BatchCommand { pub commands: Vec<Box<dyn Command>> }
 impl Command for BatchCommand {
     fn execute(&self, graph: &mut AnimGraph, cw: f32, ch: f32) { for cmd in &self.commands { cmd.execute(graph, cw, ch); } }
