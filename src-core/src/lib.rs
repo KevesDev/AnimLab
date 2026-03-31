@@ -26,6 +26,21 @@ impl From<EngineError> for JsValue {
     }
 }
 
+pub struct CursorManager { current: &'static str }
+impl CursorManager {
+    pub fn new() -> Self { Self { current: "default" } }
+    pub fn apply(&mut self, cursor: &'static str) {
+        if self.current != cursor {
+            self.current = cursor;
+            if let Some(window) = web_sys::window() {
+                if let Some(doc) = window.document() {
+                    if let Some(body) = doc.body() { let _ = body.style().set_property("cursor", cursor); }
+                }
+            }
+        }
+    }
+}
+
 #[wasm_bindgen(start)]
 pub fn init_core() -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
@@ -61,6 +76,7 @@ pub struct AnimLabEngine {
     #[wasm_bindgen(skip)] pub graph: AnimGraph,
     #[wasm_bindgen(skip)] pub history: CommandHistory,
     #[wasm_bindgen(skip)] pub id_allocator: IdAllocator,
+    #[wasm_bindgen(skip)] pub cursor_manager: CursorManager,
 }
 
 #[wasm_bindgen]
@@ -75,27 +91,35 @@ impl AnimLabEngine {
             raster_cache: HashMap::new(), quad_vb: None, quad_ib: None,
             active_tool: Box::new(BrushTool::new()), 
             graph: AnimGraph::new(), history: CommandHistory::new(), id_allocator: IdAllocator::new(),
+            cursor_manager: CursorManager::new(),
         })
     }
 
     #[wasm_bindgen] pub fn get_system_status(&self) -> String { if self.is_ready { String::from("AnimLab Rust Core: Online.") } else { String::from("AnimLab Rust Core: FATAL OFFLINE.") } }
     #[wasm_bindgen] pub fn set_brush_settings(&mut self, thickness: f32, r: f32, g: f32, b: f32, a: f32) { settings::update_settings(settings::EngineSettings { brush_thickness: thickness, brush_color: [r, g, b, a], smoothing_level: settings::get_settings().smoothing_level }); }
-    
-    // AAA FIX: Undo/Redo now accept canvas dimensions to reverse spatial translations properly
     #[wasm_bindgen] pub fn trigger_undo(&mut self) { self.history.undo(&mut self.graph, self.canvas_width, self.canvas_height); }
     #[wasm_bindgen] pub fn trigger_redo(&mut self) { self.history.redo(&mut self.graph, self.canvas_width, self.canvas_height); }
 
     #[wasm_bindgen]
     pub fn set_active_tool(&mut self, tool_name: &str) {
         info!("Rust Engine processing Semantic Tool Swap: {}", tool_name);
+        
+        if let Some(window) = web_sys::window() {
+            if let Some(doc) = window.document() {
+                if let Some(body) = doc.body() { let _ = body.style().set_property("cursor", "crosshair"); }
+            }
+        }
+
         match tool_name {
             "ToolBrush" => self.active_tool = Box::new(BrushTool::new()),
             "ToolPencil" => self.active_tool = Box::new(PencilTool::new()), 
             "ToolEraser" => self.active_tool = Box::new(EraserTool::new()), 
             "ToolCutter" => self.active_tool = Box::new(CutterTool::new()), 
-            "ToolSelect" => self.active_tool = Box::new(SelectTool::new()), // Plugs the Select tool into the UI router
+            "ToolSelect" => self.active_tool = Box::new(SelectTool::new()), 
             _ => { warn!("Tool [{}] safely defaulting to Brush.", tool_name); self.active_tool = Box::new(BrushTool::new()); }
         }
+        let target_cursor = self.active_tool.get_cursor();
+        self.cursor_manager.apply(target_cursor);
     }
 
     #[wasm_bindgen]
@@ -182,10 +206,22 @@ impl AnimLabEngine {
         }
     }
 
+    #[wasm_bindgen] pub fn hover(&mut self, x: f32, y: f32) -> Result<(), JsValue> {
+        let active_node_id = self.graph.active_layer_node.expect("Fatal Engine Error: Missing active layer.");
+        let tool = &mut self.active_tool;
+        let graph = &mut self.graph;
+        
+        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            tool.on_pointer_hover(x, y, active_node_id, graph);
+        })).unwrap_or_else(|_| {});
+        Ok(())
+    }
+
     #[wasm_bindgen] pub fn begin_stroke(&mut self, x: f32, y: f32, pressure: f32) -> Result<(), JsValue> { 
         let settings = settings::get_settings(); 
         let active_node_id = self.graph.active_layer_node.expect("Fatal Engine Error: Missing active layer.");
         self.active_tool.on_pointer_down(x, y, pressure, settings, active_node_id, &mut self.graph); 
+        let cursor = self.active_tool.get_cursor(); self.cursor_manager.apply(cursor);
         Ok(()) 
     }
     
@@ -193,14 +229,14 @@ impl AnimLabEngine {
         let active_node_id = self.graph.active_layer_node.expect("Fatal Engine Error: Missing active layer.");
         let canvas_w = self.canvas_width;
         let canvas_h = self.canvas_height;
-        
-        // Disconnect borrows to satisfy the compiler
         let tool = &mut self.active_tool;
         let graph = &mut self.graph;
 
         let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             tool.on_pointer_move(x, y, pressure, active_node_id, graph, canvas_w, canvas_h);
         })).unwrap_or_else(|_| { error!("AAA Safety Net: Handled math panic in push_point."); });
+        
+        let cursor = self.active_tool.get_cursor(); self.cursor_manager.apply(cursor);
         Ok(())
     }
     
@@ -208,7 +244,6 @@ impl AnimLabEngine {
         let target_node_id = self.graph.active_layer_node.expect("Fatal Engine Error: Missing active layer.");
         let canvas_w = self.canvas_width;
         let canvas_h = self.canvas_height;
-
         let tool = &mut self.active_tool;
         let allocator = &mut self.id_allocator;
         let graph = &mut self.graph;
@@ -222,11 +257,16 @@ impl AnimLabEngine {
             Ok(None) => {}, 
             Err(_) => { error!("AAA Safety Net: Handled geometric panic during final slice."); }
         }
+
+        let cursor = self.active_tool.get_cursor(); self.cursor_manager.apply(cursor);
         Ok(())
     }
 
     #[wasm_bindgen]
     pub fn render(&mut self) {
+        let target_cursor = self.active_tool.get_cursor();
+        self.cursor_manager.apply(target_cursor);
+
         if let (Some(device), Some(queue), Some(surface), Some(depth_stencil)) = (&self.device, &self.queue, &self.surface, &self.depth_stencil_texture) {
             
             let output = match surface.get_current_texture() { Ok(frame) => frame, Err(wgpu::SurfaceError::Outdated) => return, Err(e) => { error!("Surface error: {:?}", e); return; } };
@@ -292,9 +332,12 @@ impl AnimLabEngine {
                         }
                     }
                     
-                    // AAA VISUAL POP: Draw the crisp blue Bounding Box around active selections
                     let target_node_id = self.graph.active_layer_node.unwrap_or(1);
                     if let Some(aabb) = self.graph.get_selection_aabb(target_node_id) {
+                        let mut bb_verts = Vec::new();
+                        let mut bb_inds = Vec::new();
+                        let tb_orange = [1.0, 0.45, 0.0, 1.0];
+                        
                         let pts = vec![
                             geometry::Point { x: aabb.min_x, y: aabb.min_y, pressure: 1.0 },
                             geometry::Point { x: aabb.max_x, y: aabb.min_y, pressure: 1.0 },
@@ -302,12 +345,57 @@ impl AnimLabEngine {
                             geometry::Point { x: aabb.min_x, y: aabb.max_y, pressure: 1.0 },
                             geometry::Point { x: aabb.min_x, y: aabb.min_y, pressure: 1.0 },
                         ];
-                        let (verts, inds, _) = geometry::tessellator::Extruder::extrude_centerline(&pts, 2.0, [0.2, 0.6, 1.0, 1.0], self.canvas_width, self.canvas_height);
+                        
+                        let (box_v, box_i, _) = geometry::tessellator::Extruder::extrude_centerline(&pts, 1.0, tb_orange, self.canvas_width, self.canvas_height);
+                        
+                        let offset = bb_verts.len() as u16;
+                        bb_verts.extend(box_v);
+                        for idx in box_i { bb_inds.push(idx + offset); }
+
+                        let mut add_quad = |x: f32, y: f32, w: f32, h: f32, color: [f32; 4]| {
+                            let left = (x / self.canvas_width) * 2.0 - 1.0;
+                            let right = ((x + w) / self.canvas_width) * 2.0 - 1.0;
+                            let top = 1.0 - (y / self.canvas_height) * 2.0;
+                            let bottom = 1.0 - ((y + h) / self.canvas_height) * 2.0;
+
+                            let start_idx = bb_verts.len() as u16;
+                            bb_verts.push(math::Vertex { position: [left, top], color, tex_coords: [0.0, 0.0] });
+                            bb_verts.push(math::Vertex { position: [right, top], color, tex_coords: [1.0, 0.0] });
+                            bb_verts.push(math::Vertex { position: [right, bottom], color, tex_coords: [1.0, 1.0] });
+                            bb_verts.push(math::Vertex { position: [left, bottom], color, tex_coords: [0.0, 1.0] });
+                            bb_inds.extend_from_slice(&[start_idx, start_idx + 1, start_idx + 2, start_idx, start_idx + 2, start_idx + 3]);
+                        };
+
+                        let hs = 3.0; 
+                        let b_hs = 4.0; 
+                        let coords = [
+                            (aabb.min_x, aabb.min_y), (aabb.max_x, aabb.min_y), (aabb.max_x, aabb.max_y), (aabb.min_x, aabb.max_y),
+                            ((aabb.min_x + aabb.max_x) / 2.0, aabb.min_y), ((aabb.min_x + aabb.max_x) / 2.0, aabb.max_y),
+                            (aabb.min_x, (aabb.min_y + aabb.max_y) / 2.0), (aabb.max_x, (aabb.min_y + aabb.max_y) / 2.0)
+                        ];
+
+                        for (hx, hy) in coords {
+                            add_quad(hx - b_hs, hy - b_hs, b_hs * 2.0, b_hs * 2.0, tb_orange); 
+                            add_quad(hx - hs, hy - hs, hs * 2.0, hs * 2.0, [1.0, 1.0, 1.0, 1.0]); 
+                        }
+
                         rp.set_pipeline(standard_pipe);
-                        draw(&mut rp, &verts, &inds);
+                        draw(&mut rp, &bb_verts, &bb_inds);
                     }
 
-                    let (preview_verts, preview_inds) = self.active_tool.get_preview_mesh(self.canvas_width, self.canvas_height);
+                    // AAA FIX: Shield the 144hz loop from tool-preview panics
+                    let preview_mesh_result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                        self.active_tool.get_preview_mesh(self.canvas_width, self.canvas_height)
+                    }));
+                    
+                    let (preview_verts, preview_inds) = match preview_mesh_result {
+                        Ok(mesh) => mesh,
+                        Err(_) => {
+                            error!("AAA Safety Net: Handled rendering panic in get_preview_mesh.");
+                            (Vec::new(), Vec::new())
+                        }
+                    };
+
                     rp.set_pipeline(standard_pipe);
                     draw(&mut rp, &preview_verts, &preview_inds);
                 }

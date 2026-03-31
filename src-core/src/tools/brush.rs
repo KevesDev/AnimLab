@@ -11,15 +11,18 @@ pub struct BrushTool { raw_points: Vec<Point>, settings_snapshot: Option<EngineS
 impl BrushTool { pub fn new() -> Self { Self { raw_points: Vec::with_capacity(256), settings_snapshot: None } } }
 
 impl CanvasTool for BrushTool {
-    fn on_pointer_down(&mut self, x: f32, y: f32, pressure: f32, settings: EngineSettings) {
+    fn on_pointer_down(&mut self, x: f32, y: f32, pressure: f32, settings: EngineSettings, _active_node_id: NodeId, _graph: &mut AnimGraph) {
         self.settings_snapshot = Some(settings); self.raw_points.clear();
         let pt = Point { x, y, pressure }; if pt.is_valid() { self.raw_points.push(pt); }
     }
-    fn on_pointer_move(&mut self, x: f32, y: f32, pressure: f32, _graph: &AnimGraph) {
+    fn on_pointer_move(&mut self, x: f32, y: f32, pressure: f32, _active_node_id: NodeId, _graph: &mut AnimGraph, _canvas_width: f32, _canvas_height: f32) {
         let pt = Point { x, y, pressure }; if pt.is_valid() { self.raw_points.push(pt); }
     }
-    fn on_pointer_up(&mut self, active_node_id: NodeId, id_allocator: &mut IdAllocator, canvas_width: f32, canvas_height: f32, _graph: &AnimGraph) -> Option<Box<dyn Command>> {
+    fn on_pointer_up(&mut self, active_node_id: NodeId, id_allocator: &mut IdAllocator, canvas_width: f32, canvas_height: f32, _graph: &mut AnimGraph) -> Option<Box<dyn Command>> {
         if let Some(settings) = self.settings_snapshot.take() {
+            // AAA FIX: Prevent spline panics on microscopic/single-click interactions
+            if self.raw_points.len() < 2 { return None; }
+            
             let smoothed = smooth_spline(&self.raw_points, settings.smoothing_level);
             let (shape, vertices, indices, aabb) = Extruder::extrude_contour(&smoothed, settings.brush_thickness, settings.brush_color, canvas_width, canvas_height);
             let contour = ContourStroke { shape, color: settings.brush_color, vertices, indices, aabb, eraser_masks: Vec::new(), clip_masks: Vec::new() };
@@ -29,6 +32,9 @@ impl CanvasTool for BrushTool {
     }
     fn get_preview_mesh(&self, canvas_width: f32, canvas_height: f32) -> (Vec<Vertex>, Vec<u16>) {
         if let Some(settings) = &self.settings_snapshot {
+            // AAA FIX: Shield the 144hz render loop from out-of-bounds math panics
+            if self.raw_points.len() < 2 { return (Vec::new(), Vec::new()); }
+            
             let smoothed = smooth_spline(&self.raw_points, settings.smoothing_level);
             let (_, verts, inds, _) = Extruder::extrude_contour(&smoothed, settings.brush_thickness, settings.brush_color, canvas_width, canvas_height);
             (verts, inds)

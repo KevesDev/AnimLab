@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use log::{info, warn, error};
+use log::info;
 use crate::math::AABB;
 use crate::geometry::VectorElement;
 use geo::Contains;
@@ -30,7 +30,7 @@ pub struct AnimGraph {
     pub edges: Vec<(NodeId, NodeId)>,
     next_id: NodeId,
     pub active_layer_node: Option<NodeId>,
-    pub selected_strokes: HashSet<StrokeId>, // AAA FIX: Centralized selection state
+    pub selected_strokes: HashSet<StrokeId>, 
 }
 
 impl AnimGraph {
@@ -113,30 +113,74 @@ impl AnimGraph {
         found_ids.into_iter().collect()
     }
 
-    // AAA UPGRADE: Surgical Hit-Testing to allow users to click and select strokes.
     pub fn hit_test(&self, node_id: NodeId, x: f32, y: f32) -> Option<StrokeId> {
+        let mut best_hit: Option<StrokeId> = None;
+        let mut highest_id = 0;
+
         if let Some(node) = self.nodes.get(&node_id) {
             if let NodeType::VectorLayer { elements, .. } = &node.payload {
                 for (id, element) in elements {
-                    // 1. Broad Phase AABB check
-                    if x >= element.aabb().min_x && x <= element.aabb().max_x && y >= element.aabb().min_y && y <= element.aabb().max_y {
-                        // 2. Narrow Phase Geometric check
+                    if *id > highest_id && x >= element.aabb().min_x && x <= element.aabb().max_x && y >= element.aabb().min_y && y <= element.aabb().max_y {
+                        let mut is_hit = false;
                         match element {
                             VectorElement::Centerline(c) => {
-                                let r = c.thickness / 2.0;
-                                for pt in &c.points {
-                                    if (pt.x - x).powi(2) + (pt.y - y).powi(2) <= r * r { return Some(*id); }
+                                let r = (c.thickness / 2.0).max(5.0); 
+                                if c.points.len() == 1 {
+                                    if (c.points[0].x - x).powi(2) + (c.points[0].y - y).powi(2) <= r * r { is_hit = true; }
+                                } else {
+                                    for i in 0..c.points.len().saturating_sub(1) {
+                                        let p1 = &c.points[i]; let p2 = &c.points[i+1];
+                                        let dx = p2.x - p1.x; let dy = p2.y - p1.y;
+                                        let length_sq = dx * dx + dy * dy;
+                                        let dist_sq = if length_sq < 0.0001 { (x - p1.x).powi(2) + (y - p1.y).powi(2) } 
+                                        else { let t = (((x - p1.x) * dx + (y - p1.y) * dy) / length_sq).clamp(0.0, 1.0); (x - (p1.x + t * dx)).powi(2) + (y - (p1.y + t * dy)).powi(2) };
+                                        if dist_sq <= r * r { is_hit = true; break; }
+                                    }
                                 }
                             },
                             VectorElement::Contour(c) => {
-                                if c.shape.contains(&geo::Point::new(x as f64, y as f64)) { return Some(*id); }
+                                let pt = geo::Point::new(x, y);
+                                is_hit = c.shape.contains(&pt);
+
+                                // AAA FIX: Mask-Aware Hit-Testing
+                                if is_hit {
+                                    // 1. If it's a child piece (inside a clip mask), you MUST have clicked inside the mask
+                                    if !c.clip_masks.is_empty() {
+                                        let mut inside_clip = false;
+                                        for mask in &c.clip_masks { if mask.shape.contains(&pt) { inside_clip = true; break; } }
+                                        if !inside_clip { is_hit = false; }
+                                    }
+                                    // 2. If it's a parent piece with a hole (eraser mask), you CANNOT click the hole
+                                    if is_hit {
+                                        for mask in &c.eraser_masks { if mask.shape.contains(&pt) { is_hit = false; break; } }
+                                    }
+                                }
                             }
                         }
+                        if is_hit { highest_id = *id; best_hit = Some(*id); }
                     }
                 }
             }
         }
-        None
+        best_hit
+    }
+
+    pub fn hit_test_lasso(&self, node_id: NodeId, lasso_points: &[crate::geometry::Point]) -> Vec<StrokeId> {
+        let mut selected = Vec::new();
+        if lasso_points.len() < 3 { return selected; }
+
+        let mut lasso_aabb = AABB::empty();
+        for pt in lasso_points { lasso_aabb.expand_to_include(pt.x, pt.y, 0.0); }
+
+        if let Some(node) = self.nodes.get(&node_id) {
+            if let NodeType::VectorLayer { elements, .. } = &node.payload {
+                for (id, element) in elements {
+                    // Because we fixed the AABB shrink-wrapping, this simple intersection check is incredibly precise
+                    if element.aabb().intersects(&lasso_aabb) { selected.push(*id); }
+                }
+            }
+        }
+        selected
     }
 
     pub fn get_selection_aabb(&self, node_id: NodeId) -> Option<AABB> {

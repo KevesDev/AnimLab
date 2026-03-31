@@ -13,22 +13,21 @@ pub struct EraserTool { raw_points: Vec<Point>, settings_snapshot: Option<Engine
 impl EraserTool { pub fn new() -> Self { Self { raw_points: Vec::with_capacity(256), settings_snapshot: None } } }
 
 impl CanvasTool for EraserTool {
-    fn on_pointer_down(&mut self, x: f32, y: f32, pressure: f32, settings: EngineSettings) {
+    fn on_pointer_down(&mut self, x: f32, y: f32, pressure: f32, settings: EngineSettings, _active_node_id: NodeId, _graph: &mut AnimGraph) {
         self.settings_snapshot = Some(settings); self.raw_points.clear();
         let pt = Point { x, y, pressure }; if pt.is_valid() { self.raw_points.push(pt); }
     }
-    fn on_pointer_move(&mut self, x: f32, y: f32, pressure: f32, _graph: &AnimGraph) {
+    fn on_pointer_move(&mut self, x: f32, y: f32, pressure: f32, _active_node_id: NodeId, _graph: &mut AnimGraph, _canvas_width: f32, _canvas_height: f32) {
         let pt = Point { x, y, pressure }; if pt.is_valid() { self.raw_points.push(pt); }
     }
 
     fn on_pointer_up(
-        &mut self, active_node_id: NodeId, id_allocator: &mut IdAllocator, canvas_width: f32, canvas_height: f32, graph: &AnimGraph
+        &mut self, active_node_id: NodeId, id_allocator: &mut IdAllocator, canvas_width: f32, canvas_height: f32, graph: &mut AnimGraph
     ) -> Option<Box<dyn Command>> {
         if let Some(settings) = self.settings_snapshot.take() {
             if self.raw_points.len() < 2 { return None; }
 
             let smoothed = smooth_spline(&self.raw_points, settings.smoothing_level);
-            
             let mut sweep_aabb = AABB::empty();
             let max_r = settings.brush_thickness / 2.0;
             for pt in &smoothed { sweep_aabb.expand_to_include(pt.x, pt.y, max_r); }
@@ -41,7 +40,6 @@ impl CanvasTool for EraserTool {
             if let crate::graph::NodeType::VectorLayer { elements, .. } = &graph.nodes.get(&active_node_id).unwrap().payload {
                 for stroke_id in overlapping_ids {
                     if let Some(original_element) = elements.get(&stroke_id) {
-                        
                         let new_fragments = BooleanSlicer::slice_element(
                             original_element, &self.raw_points, settings.brush_thickness, canvas_width, canvas_height, settings.smoothing_level
                         );

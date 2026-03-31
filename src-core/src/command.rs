@@ -1,4 +1,3 @@
-use log::{info, warn};
 use crate::graph::{AnimGraph, NodeId, StrokeId};
 use crate::geometry::VectorElement;
 
@@ -30,7 +29,6 @@ impl Command for CutCommand {
     }
 }
 
-// AAA FIX: Transformation command to safely execute Undo/Redo logic for dragged fragments.
 pub struct TransformCommand {
     pub target_node_id: NodeId, pub stroke_ids: Vec<StrokeId>, pub dx: f32, pub dy: f32,
 }
