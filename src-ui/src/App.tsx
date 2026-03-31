@@ -5,91 +5,62 @@ import 'flexlayout-react/style/dark.css';
 import { defaultLayoutConfig } from './workspace/defaultLayout';
 import { CanvasViewport } from './components/CanvasViewport';
 import { PropertiesPanel } from './components/PropertiesPanel';
+import { TimelinePanel } from './components/TimelinePanel';
+import { LayerPropertiesPanel } from './components/LayerPropertiesPanel';
 import { GlobalInputManager } from './engine_bridge/InputManager';
 import { usePreferencesStore } from './store/PreferencesStore';
 import { InputAction } from './store/shortcutStore';
-import { ContextMenu } from './components/ContextMenu'; // AAA: Imported Context Menu
 
-// AAA UI: Industry-Standard Monochrome SVG Icons
 import {
-    MousePointer2, Scissors, PenTool, Activity, BoxSelect,
-    Paintbrush, Pencil, Eraser, PaintBucket, Wand2, Slash,
-    Magnet, Pipette, Minus, Square, Circle, Share2, Type,
-    Crosshair, Infinity as InfinityIcon, Bone, Hand, Search, RotateCw
+    MousePointer2, Scissors, Paintbrush, Pencil, Eraser, Layers
 } from 'lucide-react';
 
 const Toolbar: React.FC = () => {
     const activeTool = usePreferencesStore(state => state.activeTool);
     const setActiveTool = usePreferencesStore(state => state.setActiveTool);
 
-    const getToolStyle = (tool: InputAction) => ({
-        marginTop: '6px',
-        padding: '6px',
-        cursor: 'pointer',
-        backgroundColor: activeTool === tool ? '#3a3d41' : 'transparent',
-        borderRadius: '4px',
-        border: activeTool === tool ? '1px solid #555' : '1px solid transparent',
-        transition: 'all 0.1s ease-in-out',
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        width: '32px',
-        height: '32px',
-        boxSizing: 'border-box' as const,
-        color: activeTool === tool ? '#ffffff' : '#888888',
-    });
-
     const ToolButton: React.FC<{ tool: InputAction; icon: React.ElementType; title: string }> = ({ tool, icon: Icon, title }) => (
-        <div style={getToolStyle(tool)} onClick={() => setActiveTool(tool)} title={title}>
-            <Icon size={18} strokeWidth={activeTool === tool ? 2.2 : 1.5} />
-        </div>
-    );
-
-    const CategoryDivider: React.FC<{ title: string }> = ({ title }) => (
-        <div style={{ fontSize: '9px', fontWeight: 'bold', marginTop: '12px', marginBottom: '4px', borderBottom: '1px solid #333', width: '80%', textAlign: 'center', paddingBottom: '2px', color: '#555' }}>
-            {title}
+        <div 
+            onClick={() => setActiveTool(tool)} title={title}
+            style={{
+                marginTop: '6px', padding: '6px', cursor: 'pointer',
+                backgroundColor: activeTool === tool ? '#4752c4' : 'transparent',
+                borderRadius: '4px', display: 'flex', justifyContent: 'center', alignItems: 'center',
+                width: '32px', height: '32px', color: activeTool === tool ? '#fff' : '#888'
+            }}
+        >
+            <Icon size={18} />
         </div>
     );
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '10px 0', color: '#888', userSelect: 'none', height: '100%', overflowY: 'auto' }}>
-            
-            <CategoryDivider title="EDIT" />
-            <ToolButton tool={InputAction.ToolSelect} icon={MousePointer2} title="Select (S)" />
-            <ToolButton tool={InputAction.ToolCutter} icon={Scissors} title="Cutter (L)" />
-            <ToolButton tool={InputAction.ToolContourEditor} icon={PenTool} title="Contour Editor (A)" />
-            <ToolButton tool={InputAction.ToolCenterlineEditor} icon={Activity} title="Centerline Editor" />
-            <ToolButton tool={InputAction.ToolPerspective} icon={BoxSelect} title="Perspective Tool" />
+        <div className="hide-scrollbar" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '10px 0', height: '100%', overflow: 'hidden' }}>
+            <ToolButton tool={InputAction.ToolSelect} icon={MousePointer2} title="Select" />
+            <ToolButton tool={InputAction.ToolCutter} icon={Scissors} title="Cutter" />
+            <div style={{ height: '1px', background: '#333', width: '20px', margin: '10px 0' }} />
+            <ToolButton tool={InputAction.ToolBrush} icon={Paintbrush} title="Brush" />
+            <ToolButton tool={InputAction.ToolPencil} icon={Pencil} title="Pencil" />
+            <ToolButton tool={InputAction.ToolEraser} icon={Eraser} title="Eraser" />
+        </div>
+    );
+};
 
-            <CategoryDivider title="DRAW" />
-            <ToolButton tool={InputAction.ToolBrush} icon={Paintbrush} title="Vector Brush (B)" />
-            <ToolButton tool={InputAction.ToolPencil} icon={Pencil} title="Vector Pencil (P)" />
-            <ToolButton tool={InputAction.ToolEraser} icon={Eraser} title="Eraser (E)" />
-
-            <CategoryDivider title="PAINT" />
-            <ToolButton tool={InputAction.ToolPaint} icon={PaintBucket} title="Paint (F)" />
-            <ToolButton tool={InputAction.ToolPaintUnpainted} icon={Wand2} title="Paint Unpainted" />
-            <ToolButton tool={InputAction.ToolUnpaint} icon={Slash} title="Unpaint" />
-            <ToolButton tool={InputAction.ToolCloseGap} icon={Magnet} title="Close Gap (K)" />
-            <ToolButton tool={InputAction.ToolDropper} icon={Pipette} title="Dropper (I)" />
-
-            <CategoryDivider title="SHAPES" />
-            <ToolButton tool={InputAction.ToolLine} icon={Minus} title="Line" />
-            <ToolButton tool={InputAction.ToolRectangle} icon={Square} title="Rectangle" />
-            <ToolButton tool={InputAction.ToolEllipse} icon={Circle} title="Ellipse" />
-            <ToolButton tool={InputAction.ToolPolyline} icon={Share2} title="Polyline" />
-            <ToolButton tool={InputAction.ToolText} icon={Type} title="Text" />
-
-            <CategoryDivider title="RIGGING" />
-            <ToolButton tool={InputAction.ToolPivot} icon={Crosshair} title="Set Pivot" />
-            <ToolButton tool={InputAction.ToolMorphing} icon={InfinityIcon} title="Morphing" />
-            <ToolButton tool={InputAction.ToolRigging} icon={Bone} title="Rigging" />
-
-            <CategoryDivider title="VIEW" />
-            <ToolButton tool={InputAction.ToolHand} icon={Hand} title="Hand (Space)" />
-            <ToolButton tool={InputAction.ToolZoom} icon={Search} title="Zoom (Z)" />
-            <ToolButton tool={InputAction.ToolRotateView} icon={RotateCw} title="Rotate View" />
-            
+const ArtLayerToolbar: React.FC = () => {
+    const { activeArtLayer, setActiveArtLayer } = usePreferencesStore();
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '10px 0', gap: '6px' }}>
+            <Layers size={16} color="#555" style={{ marginBottom: '4px' }} />
+            {['O', 'L', 'C', 'U'].map((l, i) => (
+                <div 
+                    key={l} onClick={() => setActiveArtLayer(i)}
+                    style={{
+                        width: '28px', height: '28px', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '12px', fontWeight: 'bold', cursor: 'pointer',
+                        backgroundColor: activeArtLayer === i ? '#4752c4' : 'transparent',
+                        color: activeArtLayer === i ? '#fff' : '#888'
+                    }}
+                >{l}</div>
+            ))}
         </div>
     );
 };
@@ -100,31 +71,42 @@ export const App: React.FC = () => {
     useEffect(() => {
         const inputManager = GlobalInputManager.getInstance();
         inputManager.initialize();
-
-        return () => {
-            inputManager.cleanup();
-        };
+        return () => { inputManager.cleanup(); };
     }, []);
 
     const factory = (node: TabNode) => {
         const component = node.getComponent();
-        
         switch (component) {
-            case "CanvasNode":
-                return <CanvasViewport />;
-            case "PropertiesNode":
-                return <PropertiesPanel />;
-            case "ToolbarNode":
-                return <Toolbar />;
-            default:
-                return <div style={{ color: 'red', padding: '10px' }}>Unknown Layout Node: {component}</div>;
+            case "CanvasNode": return <CanvasViewport />;
+            case "PropertiesNode": return <PropertiesPanel />;
+            case "LayerPropertiesNode": return <LayerPropertiesPanel />;
+            case "TimelineNode": return <TimelinePanel />;
+            case "ToolbarNode": return <Toolbar />;
+            case "ArtLayerToolbarNode": return <ArtLayerToolbar />;
+            default: return <div>Unknown Node</div>;
         }
     };
 
     return (
-        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden', backgroundColor: '#1e1e1e' }}>
-            <Layout model={layoutModel} factory={factory} />
-            <ContextMenu /> {/* AAA: Context Menu floats freely above flexlayout */}
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', backgroundColor: '#111', overflow: 'hidden' }}>
+            {/* AAA TOP BAR: Full width Harmony Menu Bar */}
+            <div style={{ height: '32px', background: '#222327', borderBottom: '1px solid #111', display: 'flex', alignItems: 'center', padding: '0 12px', gap: '20px', zIndex: 100 }}>
+                <div style={{ color: '#aaa', fontSize: '10px', fontWeight: 'bold' }}>ANIMLAB PRO</div>
+                <div style={{ display: 'flex', gap: '15px', fontSize: '10px', color: '#666' }}>
+                    <span>FILE</span><span>EDIT</span><span>SCENE</span><span>VIEW</span>
+                </div>
+            </div>
+            
+            <div style={{ flex: 1, position: 'relative' }}>
+                <Layout model={layoutModel} factory={factory} />
+            </div>
+
+            <style>{`
+                .hide-scrollbar::-webkit-scrollbar { display: none; }
+                .flexlayout__tabset_header { background: #1c1d20 !important; color: #888 !important; border-bottom: 1px solid #111 !important; }
+                .flexlayout__tab { background: #141517 !important; overflow: hidden !important; }
+                .flexlayout__splitter { background: #111 !important; }
+            `}</style>
         </div>
     );
 };

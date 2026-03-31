@@ -1,109 +1,57 @@
-import React, { useEffect, useRef, useState } from 'react';
-import init_core, { AnimLabEngine } from 'animlab-core';
-import { usePreferencesStore } from '../store/PreferencesStore';
+import React, { useEffect, useRef } from 'react';
 import { GlobalInputManager } from '../engine_bridge/InputManager';
+import { usePreferencesStore } from '../store/PreferencesStore';
 
 export const CanvasViewport: React.FC = () => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
-    const [isBooting, setIsBooting] = useState(true);
-    
-    const setEngineInstance = usePreferencesStore(state => state.setEngineInstance);
-    const engineRef = useRef<any>(null);
-    const animationFrameId = useRef<number>(0);
-    const resizeTimeoutRef = useRef<number | null>(null);
+    const { engineInstance } = usePreferencesStore();
 
     useEffect(() => {
-        let isMounted = true;
-
-        const bootEngine = async () => {
-            try {
-                await init_core();
-                if (!isMounted || !canvasRef.current || !containerRef.current) return;
-
-                const engine = new AnimLabEngine();
-                engineRef.current = engine;
-                
-                const dpr = window.devicePixelRatio || 1;
-                const rect = containerRef.current.getBoundingClientRect();
-                const physicalWidth = Math.max(1, Math.floor(rect.width * dpr));
-                const physicalHeight = Math.max(1, Math.floor(rect.height * dpr));
-
-                canvasRef.current.width = physicalWidth;
-                canvasRef.current.height = physicalHeight;
-
-                await engine.attach_canvas(canvasRef.current, physicalWidth, physicalHeight);
-                
-                setEngineInstance(engine);
-                
-                // AAA ARCHITECTURE: Hand the canvas over to the Global Input Manager natively.
-                GlobalInputManager.getInstance().attachCanvas(canvasRef.current);
-                
-                setIsBooting(false);
-
-                const renderLoop = () => {
-                    if (engineRef.current) { engineRef.current.render(); }
-                    animationFrameId.current = requestAnimationFrame(renderLoop);
-                };
-                renderLoop();
-
-            } catch (err) {
-                console.error("AnimLab Fatal Graphics Error:", err);
-            }
-        };
-
-        bootEngine();
+        if (!canvasRef.current || !containerRef.current || !engineInstance) return;
+        const canvas = canvasRef.current;
+        const container = containerRef.current;
+        const inputManager = GlobalInputManager.getInstance();
+        let attached = false;
 
         const resizeObserver = new ResizeObserver((entries) => {
-            if (!engineRef.current || !canvasRef.current) return;
-            
             for (let entry of entries) {
-                if (resizeTimeoutRef.current) window.clearTimeout(resizeTimeoutRef.current);
+                const { width, height } = entry.contentRect;
                 
-                resizeTimeoutRef.current = window.setTimeout(() => {
-                    const rect = entry.target.getBoundingClientRect();
-                    const dpr = window.devicePixelRatio || 1;
-                    const pWidth = Math.max(1, Math.floor(rect.width * dpr));
-                    const pHeight = Math.max(1, Math.floor(rect.height * dpr));
+                // AAA FIX: Do not attempt to mount WebGPU if the FlexLayout container is zero-sized
+                if (width <= 0 || height <= 0) return;
 
-                    if (canvasRef.current && (canvasRef.current.width !== pWidth || canvasRef.current.height !== pHeight)) {
-                        canvasRef.current.width = pWidth;
-                        canvasRef.current.height = pHeight;
-                        engineRef.current.resize_surface(pWidth, pHeight);
-                    }
-                }, 100); 
+                const dpr = window.devicePixelRatio || 1;
+                canvas.width = width * dpr;
+                canvas.height = height * dpr;
+
+                if (!attached) {
+                    engineInstance.attach_canvas(canvas, canvas.width, canvas.height).then(() => {
+                        engineInstance.render();
+                        inputManager.attachCanvas(canvas);
+                        attached = true;
+                    });
+                } else {
+                    engineInstance.resize_surface(canvas.width, canvas.height);
+                    engineInstance.render();
+                }
             }
         });
-
-        if (containerRef.current) resizeObserver.observe(containerRef.current);
+        
+        resizeObserver.observe(container);
 
         return () => {
-            isMounted = false;
-            cancelAnimationFrame(animationFrameId.current);
-            if (resizeTimeoutRef.current) window.clearTimeout(resizeTimeoutRef.current);
             resizeObserver.disconnect();
-            
-            // Clean up the native DOM event hooks
-            GlobalInputManager.getInstance().detachCanvas();
-            
-            if (engineRef.current) {
-                engineRef.current.free();
-                setEngineInstance(null);
-            }
+            inputManager.detachCanvas();
         };
-    }, [setEngineInstance]);
+    }, [engineInstance]);
 
     return (
-        <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden', backgroundColor: '#141517' }}>
-            {isBooting && (
-                <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: '#888', fontFamily: 'sans-serif' }}>
-                    Initializing WebGPU Pipeline...
-                </div>
-            )}
-            {/* The React Component is now completely "dumb". No pointer events are bound here. */}
-            <canvas
-                ref={canvasRef}
-                style={{ display: 'block', width: '100%', height: '100%', touchAction: 'none' }}
+        <div ref={containerRef} style={{ position: 'absolute', inset: 0, backgroundColor: '#0a0a0c', overflow: 'hidden' }}>
+            <canvas 
+                ref={canvasRef} 
+                style={{ width: '100%', height: '100%', cursor: 'crosshair', touchAction: 'none' }}
+                onContextMenu={(e) => e.preventDefault()}
             />
         </div>
     );

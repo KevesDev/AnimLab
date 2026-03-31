@@ -234,6 +234,35 @@ impl AnimLabEngine {
         self.history.push_and_execute(batch, &mut self.scene, self.canvas_width, self.canvas_height); Ok(())
     }
 
+    // AAA ARCHITECTURE: Layer and UI Integration Endpoints
+    #[wasm_bindgen]
+    pub fn set_active_art_layer(&mut self, layer_index: u8) {
+        use crate::graph::ArtLayerType;
+        self.scene.active_art_layer = match layer_index {
+            0 => ArtLayerType::Overlay,
+            1 => ArtLayerType::LineArt,
+            2 => ArtLayerType::ColorArt,
+            3 => ArtLayerType::Underlay,
+            _ => ArtLayerType::LineArt,
+        };
+    }
+
+    #[wasm_bindgen]
+    pub fn set_layer_opacity(&mut self, element_id: u64, opacity: f32) {
+        if let Some(el) = self.scene.elements.get_mut(&element_id) {
+            el.opacity = opacity.clamp(0.0, 1.0);
+        }
+        self.render(); // This will visually update once the WebGPU composite pipeline is built in the next step
+    }
+
+    #[wasm_bindgen]
+    pub fn set_layer_visibility(&mut self, element_id: u64, is_visible: bool) {
+        if let Some(el) = self.scene.elements.get_mut(&element_id) {
+            el.is_visible = is_visible;
+        }
+        self.render();
+    }
+
     #[wasm_bindgen] pub fn group_selection(&mut self) {}
     #[wasm_bindgen] pub fn ungroup_selection(&mut self) {}
 }
