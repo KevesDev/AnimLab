@@ -1,5 +1,6 @@
 import { useShortcutStore, InputAction } from '../store/shortcutStore';
 import { usePreferencesStore } from '../store/PreferencesStore';
+import { useUIStore } from '../store/uiStore';
 
 export class GlobalInputManager {
     private static instance: GlobalInputManager;
@@ -20,7 +21,8 @@ export class GlobalInputManager {
         try {
             window.addEventListener('keydown', this.handleKeyDown);
             window.addEventListener('keyup', this.handleKeyUp);
-            window.addEventListener('contextmenu', this.preventContextMenu); 
+            window.addEventListener('contextmenu', this.handleContextMenu); 
+            window.addEventListener('pointerdown', this.handleWindowPointerDown);
             this.isInitialized = true;
             console.info("[InputManager] Core Event Listeners securely mounted.");
         } catch (error) {
@@ -33,7 +35,8 @@ export class GlobalInputManager {
         try {
             window.removeEventListener('keydown', this.handleKeyDown);
             window.removeEventListener('keyup', this.handleKeyUp);
-            window.removeEventListener('contextmenu', this.preventContextMenu);
+            window.removeEventListener('contextmenu', this.handleContextMenu);
+            window.removeEventListener('pointerdown', this.handleWindowPointerDown);
             this.detachCanvas();
             this.isInitialized = false;
             console.info("[InputManager] Core Event Listeners safely unmounted.");
@@ -42,7 +45,6 @@ export class GlobalInputManager {
         }
     }
 
-    // AAA ARCHITECTURE: Native DOM Pointer Binding (Bypassing React entirely)
     public attachCanvas(canvas: HTMLCanvasElement) {
         if (this.activeCanvas) this.detachCanvas();
         this.activeCanvas = canvas;
@@ -62,14 +64,27 @@ export class GlobalInputManager {
         this.activeCanvas.removeEventListener('pointercancel', this.handlePointerUp);
         this.activeCanvas.removeEventListener('pointerleave', this.handlePointerUp);
         this.activeCanvas = null;
-        console.info("[InputManager] Native Pointer Events detached from Canvas.");
     }
 
-    private preventContextMenu = (e: MouseEvent) => {
+    private handleContextMenu = (e: MouseEvent) => {
         e.preventDefault();
+        const engine = usePreferencesStore.getState().engineInstance;
+        
+        try {
+            let hasSelection = false;
+            if (engine && typeof engine.has_selection === 'function') {
+                hasSelection = engine.has_selection();
+            }
+            useUIStore.getState().openContextMenu(e.clientX, e.clientY, hasSelection);
+        } catch (error) {
+            console.error("[InputManager] Failed to launch context menu:", error);
+        }
     };
 
-    // --- HARDWARE POINTER ROUTING ---
+    private handleWindowPointerDown = (e: PointerEvent) => {
+        useUIStore.getState().closeContextMenu();
+    };
+
     private handlePointerDown = (e: PointerEvent) => {
         if (!this.activeCanvas) return;
         const engine = usePreferencesStore.getState().engineInstance;
@@ -77,7 +92,6 @@ export class GlobalInputManager {
 
         try {
             this.activeCanvas.setPointerCapture(e.pointerId);
-            
             const rect = this.activeCanvas.getBoundingClientRect();
             const dpr = window.devicePixelRatio || 1;
             const x = (e.clientX - rect.left) * dpr;
@@ -130,14 +144,16 @@ export class GlobalInputManager {
         }
     };
 
-    // --- KEYBOARD ROUTING ---
     private handleKeyDown = (e: KeyboardEvent) => {
         try {
-            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+                return;
+            }
 
             const prefs = usePreferencesStore.getState();
-            if (e.key === prefs.modifierBindings.constrain) prefs.setModifier('constrain', true);
-            if (e.key === prefs.modifierBindings.center) prefs.setModifier('center', true);
+            // Handle active continuous modifier states safely
+            if (prefs.modifierBindings && e.key === prefs.modifierBindings.constrain) prefs.setModifier('constrain', true);
+            if (prefs.modifierBindings && e.key === prefs.modifierBindings.center) prefs.setModifier('center', true);
 
             const chordParts: string[] = [];
             if (e.ctrlKey) chordParts.push('Control');
@@ -147,7 +163,9 @@ export class GlobalInputManager {
             
             if (!['ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight'].includes(e.code)) {
                 chordParts.push(e.code); 
-            } else { return; }
+            } else {
+                return; 
+            }
 
             const chord = chordParts.join('+');
             const action = useShortcutStore.getState().keyMap[chord];
@@ -164,8 +182,8 @@ export class GlobalInputManager {
     private handleKeyUp = (e: KeyboardEvent) => {
         try {
             const prefs = usePreferencesStore.getState();
-            if (e.key === prefs.modifierBindings.constrain) prefs.setModifier('constrain', false);
-            if (e.key === prefs.modifierBindings.center) prefs.setModifier('center', false);
+            if (prefs.modifierBindings && e.key === prefs.modifierBindings.constrain) prefs.setModifier('constrain', false);
+            if (prefs.modifierBindings && e.key === prefs.modifierBindings.center) prefs.setModifier('center', false);
         } catch (error) {
             console.error(`[InputManager] Failed tracking KeyUp state.`, error);
         }
@@ -178,17 +196,21 @@ export class GlobalInputManager {
         try {
             switch (action) {
                 case InputAction.Undo:
+                    console.info("[InputManager] Dispatching Semantic Action: Undo");
                     if (engine) engine.trigger_undo();
                     break;
                 case InputAction.Redo:
+                    console.info("[InputManager] Dispatching Semantic Action: Redo");
                     if (engine) engine.trigger_redo();
                     break;
+                    
                 case InputAction.DecreaseBrushSize:
                     prefs.setBrushThickness(Math.max(1.0, prefs.brush.thickness - 1.0));
                     break;
                 case InputAction.IncreaseBrushSize:
                     prefs.setBrushThickness(Math.min(100.0, prefs.brush.thickness + 1.0));
                     break;
+
                 case InputAction.ToolBrush:
                 case InputAction.ToolPencil:
                 case InputAction.ToolEraser:
@@ -214,13 +236,15 @@ export class GlobalInputManager {
                 case InputAction.ToolZoom:
                 case InputAction.ToolRotateView:
                     prefs.setActiveTool(action);
+                    console.info(`[InputManager] State Mutated: Active Tool is now ${action}`);
                     break;
+                    
                 default:
-                    console.warn(`[InputManager] Semantic Action '${action}' lacks execution logic.`);
+                    console.warn(`[InputManager] Semantic Action '${action}' lacks execution logic in the dispatch router.`);
                     break;
             }
         } catch (error) {
-            console.error(`[InputManager] FATAL Exception executing '${action}'.`, error);
+            console.error(`[InputManager] FATAL: The Rust Engine or React UI threw an unhandled exception while executing '${action}'.`, error);
         }
     }
 }

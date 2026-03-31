@@ -398,6 +398,7 @@ impl AnimLabEngine {
                             add_quad(hx - hs, hy - hs, hs * 2.0, hs * 2.0, [1.0, 1.0, 1.0, 1.0]); 
                         }
 
+                        // AAA VISUAL POP: Draw the Toon Boom Movable Pivot Indicator
                         let (px, py) = self.active_tool.get_custom_pivot().unwrap_or((
                             aabb.min_x + (aabb.max_x - aabb.min_x) / 2.0,
                             aabb.min_y + (aabb.max_y - aabb.min_y) / 2.0
@@ -410,6 +411,7 @@ impl AnimLabEngine {
                         draw(&mut rp, &bb_verts, &bb_inds);
                     }
 
+                    // AAA FIX: Shield the 144hz loop from tool-preview panics
                     let preview_mesh_result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                         self.active_tool.get_preview_mesh(self.canvas_width, self.canvas_height)
                     }));
@@ -430,4 +432,109 @@ impl AnimLabEngine {
             output.present();
         }
     }
+
+    // AAA FEATURE: Safe context menu endpoints
+    #[wasm_bindgen]
+    pub fn has_selection(&self) -> bool {
+        !self.graph.selected_strokes.is_empty()
+    }
+
+    #[wasm_bindgen]
+    pub fn select_all(&mut self) {
+        let target_node_id = self.graph.active_layer_node.unwrap_or(1);
+        self.graph.selected_strokes.clear();
+        if let Some(node) = self.graph.nodes.get(&target_node_id) {
+            if let crate::graph::NodeType::VectorLayer { elements, .. } = &node.payload {
+                for (id, _) in elements.iter() {
+                    self.graph.selected_strokes.insert(*id);
+                }
+            }
+        }
+    }
+
+    #[wasm_bindgen]
+    pub fn flip_selection(&mut self, flip_h: bool, flip_v: bool) -> Result<(), JsValue> {
+        let target_node_id = self.graph.active_layer_node.unwrap_or(1);
+        if self.graph.selected_strokes.is_empty() { return Ok(()); }
+
+        if let Some(aabb) = self.graph.get_selection_aabb(target_node_id) {
+            let cx = aabb.min_x + (aabb.max_x - aabb.min_x) / 2.0;
+            let cy = aabb.min_y + (aabb.max_y - aabb.min_y) / 2.0;
+            let sx = if flip_h { -1.0 } else { 1.0 };
+            let sy = if flip_v { -1.0 } else { 1.0 };
+
+            let mut old_elements = Vec::new();
+            let mut new_elements = Vec::new();
+
+            if let Some(node) = self.graph.nodes.get_mut(&target_node_id) {
+                if let crate::graph::NodeType::VectorLayer { elements, .. } = &mut node.payload {
+                    for id in &self.graph.selected_strokes {
+                        if let Some(el) = elements.get(id) {
+                            old_elements.push((*id, el.clone()));
+                            let mut new_el = el.clone();
+                            new_el.transform(0.0, 0.0, sx, sy, 0.0, cx, cy, self.canvas_width, self.canvas_height);
+                            new_elements.push((*id, new_el.clone()));
+                            elements.insert(*id, new_el);
+                        }
+                    }
+                }
+            }
+
+            if !new_elements.is_empty() {
+                let cmd = Box::new(crate::command::AffineCommand { target_node_id, old_elements, new_elements });
+                self.history.push_and_execute(cmd, &mut self.graph, self.canvas_width, self.canvas_height);
+            }
+        }
+        Ok(())
+    }
+
+    // CLIPBOARD PIPELINE STUBS
+    #[wasm_bindgen]
+    pub fn delete_selection(&mut self) -> Result<(), JsValue> {
+        let target_node_id = self.graph.active_layer_node.unwrap_or(1);
+        if self.graph.selected_strokes.is_empty() { return Ok(()); }
+        
+        let mut severed_fragments = Vec::new();
+        if let Some(node) = self.graph.nodes.get(&target_node_id) {
+            if let crate::graph::NodeType::VectorLayer { elements, .. } = &node.payload {
+                for id in &self.graph.selected_strokes {
+                    if let Some(el) = elements.get(id) {
+                        severed_fragments.push((*id, el.clone()));
+                    }
+                }
+            }
+        }
+        
+        for (stroke_id, original_element) in severed_fragments {
+            let cmd = Box::new(crate::command::CutCommand {
+                target_node_id, severed_stroke_id: stroke_id, original_element, new_fragments: Vec::new()
+            });
+            self.history.push_and_execute(cmd, &mut self.graph, self.canvas_width, self.canvas_height);
+        }
+        
+        self.graph.selected_strokes.clear();
+        Ok(())
+    }
+
+    #[wasm_bindgen]
+    pub fn cut_selection(&mut self) {
+        info!("Rust Engine processing Cut action.");
+        let _ = self.delete_selection();
+    }
+
+    #[wasm_bindgen]
+    pub fn copy_selection(&mut self) {
+        info!("Rust Engine processing Copy action.");
+    }
+
+    #[wasm_bindgen]
+    pub fn paste_clipboard(&mut self) {
+        info!("Rust Engine processing Paste action.");
+    }
+
+    #[wasm_bindgen]
+    pub fn group_selection(&mut self) { info!("Rust Engine processing Group action."); }
+
+    #[wasm_bindgen]
+    pub fn ungroup_selection(&mut self) { info!("Rust Engine processing Ungroup action."); }
 }

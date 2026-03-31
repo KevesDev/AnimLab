@@ -8,6 +8,7 @@ import { PropertiesPanel } from './components/PropertiesPanel';
 import { GlobalInputManager } from './engine_bridge/InputManager';
 import { usePreferencesStore } from './store/PreferencesStore';
 import { InputAction } from './store/shortcutStore';
+import { ContextMenu } from './components/ContextMenu'; // AAA: Imported Context Menu
 
 // AAA UI: Industry-Standard Monochrome SVG Icons
 import {
@@ -35,10 +36,9 @@ const Toolbar: React.FC = () => {
         width: '32px',
         height: '32px',
         boxSizing: 'border-box' as const,
-        color: activeTool === tool ? '#ffffff' : '#888888', // Icons brighten when active
+        color: activeTool === tool ? '#ffffff' : '#888888',
     });
 
-    // Clean abstraction to handle the SVG injection and active-state styling
     const ToolButton: React.FC<{ tool: InputAction; icon: React.ElementType; title: string }> = ({ tool, icon: Icon, title }) => (
         <div style={getToolStyle(tool)} onClick={() => setActiveTool(tool)} title={title}>
             <Icon size={18} strokeWidth={activeTool === tool ? 2.2 : 1.5} />
@@ -124,6 +124,7 @@ export const App: React.FC = () => {
     return (
         <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden', backgroundColor: '#1e1e1e' }}>
             <Layout model={layoutModel} factory={factory} />
+            <ContextMenu /> {/* AAA: Context Menu floats freely above flexlayout */}
         </div>
     );
 };
