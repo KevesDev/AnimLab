@@ -1,5 +1,6 @@
 export const defaultLayoutConfig = {
     global: {
+        rootOrientationVertical: true, // AAA FIX: This is the ONLY way to make the Root split Top/Bottom
         tabSetEnableTabStrip: true,
         tabSetHeaderHeight: 24,
         tabSetTabStripHeight: 24,
@@ -7,48 +8,37 @@ export const defaultLayoutConfig = {
         enableEdgeDock: false,
     },
     layout: {
-        type: "column", // AAA: Root vertical stack (Top Workspace / Bottom Timeline)
+        type: "row",
         weight: 100,
         children: [
-            // TOP SECTION: The Horizontal Workspace
+            // Top Workspace: Since the Root is Vertical, this Row will be Horizontal
             {
-                type: "row", // AAA: Arranges the panels Side-by-Side
-                weight: 75,
+                type: "row",
+                weight: 80,
                 children: [
-                    // A. Left Sidebar: Drawing Tools (Fixed Width)
                     {
                         type: "tabset",
                         width: 45,
-                        enableTabStrip: false, // Hides the invasive tab label
-                        enableDrop: false,
-                        enableDrag: false,
-                        enableDivide: false,
+                        enableTabStrip: false,
                         id: "tools-area",
                         children: [{ type: "tab", id: "tools", component: "ToolbarNode" }]
                     },
-                    // B. The Center: Camera View (Fluid Weight)
                     {
                         type: "tabset",
                         weight: 100, 
                         id: "canvas-area",
-                        enableDrop: false,
-                        children: [{ type: "tab", id: "canvas", name: "Camera View", component: "CanvasNode" }]
+                        children: [{ type: "tab", id: "canvas", name: "Camera View", component: "CanvasNode", selected: true }]
                     },
-                    // C. Center-Right: Art Layer Quadrant (Fixed Width)
                     {
                         type: "tabset",
                         width: 40,
                         enableTabStrip: false,
-                        enableDrop: false,
-                        enableDrag: false,
-                        enableDivide: false,
                         id: "art-layers-area",
                         children: [{ type: "tab", id: "art-layers", component: "ArtLayerToolbarNode" }]
                     },
-                    // D. Far Right: Properties Column (Fixed Width)
                     {
                         type: "tabset",
-                        width: 280,
+                        width: 280, 
                         id: "properties-area",
                         children: [
                             { type: "tab", id: "properties", name: "Tool Properties", component: "PropertiesNode" },
@@ -57,10 +47,10 @@ export const defaultLayoutConfig = {
                     }
                 ]
             },
-            // BOTTOM SECTION: The Timeline (Full Width Floor)
+            // Bottom Timeline: Direct child of a Vertical Row = Full-width bottom panel
             {
                 type: "tabset",
-                weight: 25,
+                weight: 20, 
                 id: "timeline-area",
                 children: [{ type: "tab", id: "timeline", name: "Timeline", component: "TimelineNode" }]
             }

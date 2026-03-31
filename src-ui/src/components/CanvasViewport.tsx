@@ -17,10 +17,7 @@ export const CanvasViewport: React.FC = () => {
         const resizeObserver = new ResizeObserver((entries) => {
             for (let entry of entries) {
                 const { width, height } = entry.contentRect;
-                
-                // AAA FIX: Do not attempt to mount WebGPU if the FlexLayout container is zero-sized
-                if (width <= 0 || height <= 0) return;
-
+                if (width <= 5 || height <= 5) return; 
                 const dpr = window.devicePixelRatio || 1;
                 canvas.width = width * dpr;
                 canvas.height = height * dpr;
@@ -37,22 +34,11 @@ export const CanvasViewport: React.FC = () => {
                 }
             }
         });
-        
         resizeObserver.observe(container);
-
-        return () => {
-            resizeObserver.disconnect();
-            inputManager.detachCanvas();
-        };
+        return () => { resizeObserver.disconnect(); inputManager.detachCanvas(); };
     }, [engineInstance]);
 
-    return (
-        <div ref={containerRef} style={{ position: 'absolute', inset: 0, backgroundColor: '#0a0a0c', overflow: 'hidden' }}>
-            <canvas 
-                ref={canvasRef} 
-                style={{ width: '100%', height: '100%', cursor: 'crosshair', touchAction: 'none' }}
-                onContextMenu={(e) => e.preventDefault()}
-            />
-        </div>
-    );
+    return <div ref={containerRef} style={{ position: 'absolute', inset: 0, backgroundColor: '#0a0a0c', overflow: 'hidden' }}>
+        <canvas ref={canvasRef} style={{ width: '100%', height: '100%', cursor: 'crosshair', touchAction: 'none' }} />
+    </div>;
 };

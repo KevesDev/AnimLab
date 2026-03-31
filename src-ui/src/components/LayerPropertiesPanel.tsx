@@ -8,7 +8,8 @@ export const LayerPropertiesPanel: React.FC = () => {
     const handleOpacityChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = parseInt(e.target.value);
         setOpacity(val);
-        setLayerOpacity(1000, val / 100.0); // Hardcoded ID 1000 for scaffold testing
+        // Mocking layer ID for now
+        setLayerOpacity(1000, val / 100.0); 
     };
 
     return (
@@ -19,15 +20,14 @@ export const LayerPropertiesPanel: React.FC = () => {
                     <input 
                         type="range" min="0" max="100" value={opacity} 
                         onChange={handleOpacityChange}
-                        className="flex-1 accent-[#4752c4]"
+                        className="flex-1 accent-[#4752c4] cursor-pointer"
                     />
                     <span className="w-10 text-right text-xs bg-[#141517] border border-[#2a2c30] rounded py-1 px-2">{opacity}%</span>
                 </div>
             </div>
-
             <div>
                 <label className="block text-[10px] font-bold text-[#888] mb-2 uppercase tracking-wider">Blend Mode</label>
-                <select className="w-full bg-[#141517] border border-[#2a2c30] rounded px-3 py-2 text-xs outline-none focus:border-[#4752c4]">
+                <select className="w-full bg-[#141517] border border-[#2a2c30] rounded px-3 py-2 text-xs outline-none focus:border-[#4752c4] cursor-pointer">
                     <option>Normal</option>
                     <option>Multiply</option>
                     <option>Screen</option>
