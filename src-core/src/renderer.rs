@@ -112,7 +112,8 @@ impl WebGpuRenderer {
         {
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Render Pass"), 
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.08, g: 0.09, b: 0.10, a: 1.0 }), store: wgpu::StoreOp::Store }, depth_slice: None })], 
+                // AAA FIX: Set the clear color to off-white (0.9, 0.9, 0.9) to match a paper canvas
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.9, g: 0.9, b: 0.9, a: 1.0 }), store: wgpu::StoreOp::Store }, depth_slice: None })], 
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &self.depth_stencil_texture, depth_ops: None, stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Store }) }), 
                 timestamp_writes: None, occlusion_query_set: None, ..Default::default()
             });

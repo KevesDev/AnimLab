@@ -70,13 +70,15 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     setLayerOpacity: (elementId, opacity) => {
         const engine = get().engineInstance;
         if (engine && typeof engine.set_layer_opacity === 'function') {
-            engine.set_layer_opacity(elementId, opacity);
+            // AAA FIX: Explicitly convert the JS Number to a BigInt for Rust's u64 parameter
+            engine.set_layer_opacity(BigInt(elementId), opacity);
         }
     },
     setLayerVisibility: (elementId, isVisible) => {
         const engine = get().engineInstance;
         if (engine && typeof engine.set_layer_visibility === 'function') {
-            engine.set_layer_visibility(elementId, isVisible);
+            // AAA FIX: Explicitly convert the JS Number to a BigInt for Rust's u64 parameter
+            engine.set_layer_visibility(BigInt(elementId), isVisible);
         }
     }
 }));

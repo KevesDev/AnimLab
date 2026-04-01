@@ -11,6 +11,9 @@ import { GlobalInputManager } from './engine_bridge/InputManager';
 import { usePreferencesStore } from './store/PreferencesStore';
 import { InputAction } from './store/shortcutStore';
 
+// AAA FIX: Removed init_core from imports since #[wasm_bindgen(start)] runs it automatically
+import init, { AnimLabEngine } from 'animlab-core';
+
 import { MousePointer2, Scissors, Paintbrush, Pencil, Eraser, Layers } from 'lucide-react';
 
 const Toolbar: React.FC = () => {
@@ -48,8 +51,34 @@ export const App: React.FC = () => {
 
     useEffect(() => {
         const inputManager = GlobalInputManager.getInstance();
-        inputManager.initialize();
-        return () => { inputManager.cleanup(); };
+        
+        const bootEngine = async () => {
+            try {
+                // AAA FIX: Strict Mode Guard. If engine exists, abort the duplicate boot sequence.
+                if (usePreferencesStore.getState().engineInstance) {
+                    console.info("[App] Engine already initialized (Strict Mode bypass).");
+                    return;
+                }
+
+                // Awaiting init() automatically triggers the Rust #[wasm_bindgen(start)] function
+                await init();
+                
+                const engine = new AnimLabEngine();
+                
+                usePreferencesStore.getState().setEngineInstance(engine);
+                console.info("[App] AnimLab WebAssembly Core securely initialized and injected.");
+                
+                inputManager.initialize();
+            } catch (error) {
+                console.error("[App] FATAL: Failed to initialize WebAssembly core:", error);
+            }
+        };
+
+        bootEngine();
+        
+        return () => { 
+            inputManager.cleanup(); 
+        };
     }, []);
 
     const factory = (node: TabNode) => {
@@ -79,13 +108,12 @@ export const App: React.FC = () => {
             </div>
 
             <style>{`
-                /* AAA: Toon Boom Harmony style sleek tabs */
                 .flexlayout__tabset_header { background: #1c1d20 !important; border-bottom: 1px solid #111 !important; height: 22px !important; }
                 .flexlayout__tab_button { padding: 0 10px !important; background: transparent !important; }
                 .flexlayout__tab_button_content { font-size: 9px !important; color: #666 !important; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; }
                 .flexlayout__tab_button--selected { background: #2a2c30 !important; border-radius: 4px 4px 0 0 !important; }
                 .flexlayout__tab_button--selected .flexlayout__tab_button_content { color: #ccc !important; }
-                .flexlayout__tab_button_trailing { display: none !important; } /* Removes the 'X' close buttons */
+                .flexlayout__tab_button_trailing { display: none !important; } 
                 
                 .flexlayout__tab { background: #141517 !important; overflow: hidden !important; }
                 .flexlayout__splitter { background: #111 !important; width: 2px !important; }
