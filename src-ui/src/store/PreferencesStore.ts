@@ -6,8 +6,8 @@ interface Modifiers { constrain: boolean; center: boolean; }
 interface ModifierBindings { constrain: string; center: string; }
 
 // AAA XSheet Types
-export interface TimelineBlock { start: number; duration: number; id: number; }
-export interface TimelineElement { id: number; name: string; blocks: TimelineBlock[]; }
+export interface TimelineLayer { id: bigint; name: string; }
+export interface TimelineBlock { elementId: bigint; start: number; duration: number; id: bigint; }
 
 interface PreferencesState {
     engineInstance: any | null;
@@ -17,7 +17,9 @@ interface PreferencesState {
     modifierBindings: ModifierBindings;
     activeArtLayer: number; 
     currentFrame: number; 
-    timelineState: TimelineElement[]; // AAA Sync: The raw data from Rust
+    
+    timelineLayers: TimelineLayer[];
+    timelineBlocks: TimelineBlock[];
 
     setEngineInstance: (engine: any) => void;
     setActiveTool: (tool: InputAction) => void;
@@ -31,7 +33,7 @@ interface PreferencesState {
     setLayerVisibility: (elementId: number, isVisible: boolean) => void;
     
     setCurrentFrame: (frame: number) => void; 
-    fetchTimelineState: () => void; // AAA Sync: Re-queries Rust
+    fetchTimelineState: () => void;
 }
 
 export const usePreferencesStore = create<PreferencesState>((set, get) => ({
@@ -42,7 +44,8 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     modifierBindings: { constrain: 'Shift', center: 'Alt' },
     activeArtLayer: 1, 
     currentFrame: 1,
-    timelineState: [], 
+    timelineLayers: [], 
+    timelineBlocks: [],
 
     setEngineInstance: (engine) => set({ engineInstance: engine }),
     
@@ -88,12 +91,30 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     
     fetchTimelineState: () => {
         const engine = get().engineInstance;
-        if (engine && typeof engine.get_timeline_state === 'function') {
+        if (engine && typeof engine.get_timeline_blocks === 'function') {
             try {
-                const state = JSON.parse(engine.get_timeline_state());
-                set({ timelineState: state });
+                // Parse standard layer metadata
+                const layersJson = engine.get_timeline_layers();
+                const layersData = JSON.parse(layersJson).map((l: any) => ({ ...l, id: BigInt(l.id) }));
+                
+                // AAA Zero-Allocation Parsing: Read the flat BigUint64Array directly from WASM memory
+                const rawBlocks = engine.get_timeline_blocks(); 
+                const blocks: TimelineBlock[] = [];
+                let i = 0;
+                while (i < rawBlocks.length) {
+                    const elementId = rawBlocks[i++];
+                    const numBlocks = Number(rawBlocks[i++]);
+                    for (let b = 0; b < numBlocks; b++) {
+                        const start = Number(rawBlocks[i++]);
+                        const duration = Number(rawBlocks[i++]);
+                        const id = rawBlocks[i++];
+                        blocks.push({ elementId, start, duration, id });
+                    }
+                }
+                
+                set({ timelineLayers: layersData, timelineBlocks: blocks });
             } catch (e) {
-                console.error("[PreferencesStore] Failed to parse timeline state from WASM", e);
+                console.error("[PreferencesStore] Failed to map timeline state from WASM", e);
             }
         }
     }

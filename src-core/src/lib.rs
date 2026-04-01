@@ -62,14 +62,27 @@ impl AnimLabEngine {
         let mut scene = SceneManager::new();
         let mut id_allocator = IdAllocator::new();
         
-        let el_id = id_allocator.generate();
-        let mut el = DrawingElement::new(el_id, "Drawing_1".to_string());
-        let draw_id = id_allocator.generate();
-        el.library.insert(draw_id, DrawingData::new());
-        el.exposures.insert(1, ExposureBlock { drawing_id: draw_id, start_frame: 1, duration: 1 });
-        scene.elements.insert(el_id, el);
-        scene.z_stack.push(el_id);
-        scene.active_element_id = Some(el_id);
+        // AAA FIX: Initialize a proper, industry-standard multi-layer hierarchy to populate the grid
+        let layer_names = vec!["Color Art", "Clean Line Art", "Rough Animation"];
+        let mut active_id = None;
+
+        for name in layer_names {
+            let el_id = id_allocator.generate();
+            let mut el = DrawingElement::new(el_id, name.to_string());
+            
+            // Only add an initial exposure block to the "Rough Animation" layer
+            if name == "Rough Animation" {
+                let draw_id = id_allocator.generate();
+                el.library.insert(draw_id, DrawingData::new());
+                el.exposures.insert(1, ExposureBlock { drawing_id: draw_id, start_frame: 1, duration: 1 });
+                active_id = Some(el_id);
+            }
+            
+            scene.elements.insert(el_id, el);
+            scene.z_stack.push(el_id);
+        }
+
+        scene.active_element_id = active_id;
 
         Ok(AnimLabEngine {
             is_ready: true, canvas_width: 0.0, canvas_height: 0.0, renderer: None,
@@ -163,35 +176,38 @@ impl AnimLabEngine {
     #[wasm_bindgen] pub fn set_layer_opacity(&mut self, element_id: u64, opacity: f32) { operations::layers::set_opacity(&mut self.scene, element_id, opacity); self.render(); }
     #[wasm_bindgen] pub fn set_layer_visibility(&mut self, element_id: u64, is_visible: bool) { operations::layers::set_visibility(&mut self.scene, element_id, is_visible); self.render(); }
 
-    #[wasm_bindgen]
-    pub fn set_current_frame(&mut self, frame: u32) { self.scene.current_frame = frame; self.render(); }
+    #[wasm_bindgen] pub fn set_current_frame(&mut self, frame: u32) { self.scene.current_frame = frame; self.render(); }
+    #[wasm_bindgen] pub fn set_exposure(&mut self, element_id: u64, start_frame: u32, duration: u32, drawing_id: u64) { operations::exposure::set_exposure(&mut self.scene, element_id, start_frame, duration, drawing_id); self.render(); }
+    #[wasm_bindgen] pub fn extend_exposure(&mut self, element_id: u64, start_frame: u32, new_duration: u32) { operations::exposure::extend_exposure(&mut self.scene, element_id, start_frame, new_duration); self.render(); }
+    #[wasm_bindgen] pub fn split_exposure(&mut self, element_id: u64, cut_frame: u32) { operations::exposure::split_exposure(&mut self.scene, element_id, cut_frame); self.render(); }
+    #[wasm_bindgen] pub fn clear_exposure(&mut self, element_id: u64, start_frame: u32, duration: u32) { operations::exposure::clear_exposure(&mut self.scene, element_id, start_frame, duration); self.render(); }
 
     #[wasm_bindgen]
-    pub fn set_exposure(&mut self, element_id: u64, start_frame: u32, duration: u32, drawing_id: u64) { operations::exposure::set_exposure(&mut self.scene, element_id, start_frame, duration, drawing_id); self.render(); }
-
-    #[wasm_bindgen]
-    pub fn extend_exposure(&mut self, element_id: u64, start_frame: u32, new_duration: u32) { operations::exposure::extend_exposure(&mut self.scene, element_id, start_frame, new_duration); self.render(); }
-
-    #[wasm_bindgen]
-    pub fn split_exposure(&mut self, element_id: u64, cut_frame: u32) { operations::exposure::split_exposure(&mut self.scene, element_id, cut_frame); self.render(); }
-
-    #[wasm_bindgen]
-    pub fn clear_exposure(&mut self, element_id: u64, start_frame: u32, duration: u32) { operations::exposure::clear_exposure(&mut self.scene, element_id, start_frame, duration); self.render(); }
-
-    // AAA UI SYNC: Generates a JSON map of the active intervals to feed the React Timeline
-    #[wasm_bindgen]
-    pub fn get_timeline_state(&self) -> String {
-        let mut elements_json = Vec::new();
+    pub fn get_timeline_layers(&self) -> String {
+        let mut layers_json = Vec::new();
         for el_id in self.scene.z_stack.iter().rev() {
             if let Some(el) = self.scene.elements.get(el_id) {
-                let mut blocks_json = Vec::new();
-                for (_, block) in &el.exposures {
-                    blocks_json.push(format!(r#"{{"start": {}, "duration": {}, "id": {}}}"#, block.start_frame, block.duration, block.drawing_id));
-                }
                 let name = el.name.replace("\"", "\\\"");
-                elements_json.push(format!(r#"{{"id": {}, "name": "{}", "blocks": [{}]}}"#, el_id, name, blocks_json.join(",")));
+                layers_json.push(format!(r#"{{"id": "{}", "name": "{}"}}"#, el_id, name));
             }
         }
-        format!("[{}]", elements_json.join(","))
+        format!("[{}]", layers_json.join(","))
+    }
+
+    #[wasm_bindgen]
+    pub fn get_timeline_blocks(&self) -> Vec<u64> {
+        let mut flat_data = Vec::with_capacity(1024);
+        for el_id in self.scene.z_stack.iter().rev() {
+            if let Some(el) = self.scene.elements.get(el_id) {
+                flat_data.push(*el_id);
+                flat_data.push(el.exposures.len() as u64);
+                for (_, block) in &el.exposures {
+                    flat_data.push(block.start_frame as u64);
+                    flat_data.push(block.duration as u64);
+                    flat_data.push(block.drawing_id);
+                }
+            }
+        }
+        flat_data
     }
 }
