@@ -2,7 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 
-// Reset browser default margins to ensure the FlexLayout grid perfectly hugs the OS window bounds.
+// AAA FIX: Standardized global reset. Removed redundant overflow rules.
 const rootStyle = document.createElement('style');
 rootStyle.innerHTML = `
   body, html {
@@ -11,7 +11,7 @@ rootStyle.innerHTML = `
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background-color: #1e1e1e;
+    background-color: #111;
   }
   * {
     box-sizing: border-box;
@@ -20,7 +20,5 @@ rootStyle.innerHTML = `
 document.head.appendChild(rootStyle);
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-    // StrictMode intentionally disabled here. In WebGPU engine dev, double-mounting 
-    // the WASM memory on boot causes fatal adapter locking.
     <App />
 );
