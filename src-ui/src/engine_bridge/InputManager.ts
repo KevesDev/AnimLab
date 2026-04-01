@@ -131,7 +131,8 @@ export class GlobalInputManager {
 
     private handlePointerUp = (e: PointerEvent) => {
         if (!this.activeCanvas) return;
-        const engine = usePreferencesStore.getState().engineInstance;
+        const prefs = usePreferencesStore.getState();
+        const engine = prefs.engineInstance;
         if (!engine) return;
 
         try {
@@ -139,6 +140,9 @@ export class GlobalInputManager {
                 this.activeCanvas.releasePointerCapture(e.pointerId);
             }
             engine.end_stroke();
+            
+            // AAA XSheet: Fetch new reality from Rust in case a blank frame generated an ExposureBlock
+            prefs.fetchTimelineState();
         } catch (err) {
             console.error("[InputManager] Pipeline crashed during pointer up:", err);
         }
@@ -151,7 +155,6 @@ export class GlobalInputManager {
             }
 
             const prefs = usePreferencesStore.getState();
-            // Handle active continuous modifier states safely
             if (prefs.modifierBindings && e.key === prefs.modifierBindings.constrain) prefs.setModifier('constrain', true);
             if (prefs.modifierBindings && e.key === prefs.modifierBindings.center) prefs.setModifier('center', true);
 
@@ -197,11 +200,25 @@ export class GlobalInputManager {
             switch (action) {
                 case InputAction.Undo:
                     console.info("[InputManager] Dispatching Semantic Action: Undo");
-                    if (engine) engine.trigger_undo();
+                    if (engine) {
+                        engine.trigger_undo();
+                        prefs.fetchTimelineState(); // AAA XSheet: Undo might delete a block. Fetch reality.
+                    }
                     break;
                 case InputAction.Redo:
                     console.info("[InputManager] Dispatching Semantic Action: Redo");
-                    if (engine) engine.trigger_redo();
+                    if (engine) {
+                        engine.trigger_redo();
+                        prefs.fetchTimelineState();
+                    }
+                    break;
+
+                // AAA UI: Keyboard scrub the timeline playhead! (Bindings: ',' and '.')
+                case InputAction.PrevFrame:
+                    prefs.setCurrentFrame(Math.max(1, prefs.currentFrame - 1));
+                    break;
+                case InputAction.NextFrame:
+                    prefs.setCurrentFrame(prefs.currentFrame + 1);
                     break;
                     
                 case InputAction.DecreaseBrushSize:
@@ -211,6 +228,7 @@ export class GlobalInputManager {
                     prefs.setBrushThickness(Math.min(100.0, prefs.brush.thickness + 1.0));
                     break;
 
+                // AAA ARCHITECTURE: Restored the full suite of Semantic Tool Actions
                 case InputAction.ToolBrush:
                 case InputAction.ToolPencil:
                 case InputAction.ToolEraser:

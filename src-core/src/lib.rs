@@ -9,9 +9,9 @@ pub mod graph;
 pub mod command; 
 pub mod tools;
 pub mod renderer;
-pub mod operations; // AAA: Our new modular architecture
+pub mod operations;
 
-use graph::{SceneManager, IdAllocator, DrawingElement, DrawingData};
+use graph::{SceneManager, IdAllocator, DrawingElement, DrawingData, ExposureBlock};
 use command::CommandHistory;
 use tools::{CanvasTool, brush::BrushTool, pencil::PencilTool, eraser::EraserTool, cutter::CutterTool, select::SelectTool};
 use geometry::VectorElement;
@@ -45,10 +45,7 @@ pub fn init_core() -> Result<(), JsValue> {
 
 #[wasm_bindgen]
 pub struct AnimLabEngine {
-    is_ready: bool,
-    canvas_width: f32,
-    canvas_height: f32,
-    
+    is_ready: bool, canvas_width: f32, canvas_height: f32,
     #[wasm_bindgen(skip)] pub renderer: Option<WebGpuRenderer>,
     #[wasm_bindgen(skip)] pub active_tool: Box<dyn CanvasTool>,
     #[wasm_bindgen(skip)] pub scene: SceneManager,
@@ -69,7 +66,7 @@ impl AnimLabEngine {
         let mut el = DrawingElement::new(el_id, "Drawing_1".to_string());
         let draw_id = id_allocator.generate();
         el.library.insert(draw_id, DrawingData::new());
-        el.exposures.insert(1, draw_id);
+        el.exposures.insert(1, ExposureBlock { drawing_id: draw_id, start_frame: 1, duration: 1 });
         scene.elements.insert(el_id, el);
         scene.z_stack.push(el_id);
         scene.active_element_id = Some(el_id);
@@ -89,25 +86,18 @@ impl AnimLabEngine {
         self.render();
     }
     
-    #[wasm_bindgen] 
-    pub fn trigger_undo(&mut self) { self.history.undo(&mut self.scene, self.canvas_width, self.canvas_height); self.render(); }
-    
-    #[wasm_bindgen] 
-    pub fn trigger_redo(&mut self) { self.history.redo(&mut self.scene, self.canvas_width, self.canvas_height); self.render(); }
+    #[wasm_bindgen] pub fn trigger_undo(&mut self) { self.history.undo(&mut self.scene, self.canvas_width, self.canvas_height); self.render(); }
+    #[wasm_bindgen] pub fn trigger_redo(&mut self) { self.history.redo(&mut self.scene, self.canvas_width, self.canvas_height); self.render(); }
 
     #[wasm_bindgen]
     pub fn set_active_tool(&mut self, tool_name: &str) {
         if let Some(window) = web_sys::window() { if let Some(doc) = window.document() { if let Some(body) = doc.body() { let _ = body.style().set_property("cursor", "crosshair"); } } }
         match tool_name {
-            "ToolBrush" => self.active_tool = Box::new(BrushTool::new()),
-            "ToolPencil" => self.active_tool = Box::new(PencilTool::new()), 
-            "ToolEraser" => self.active_tool = Box::new(EraserTool::new()), 
-            "ToolCutter" => self.active_tool = Box::new(CutterTool::new()), 
-            "ToolSelect" => self.active_tool = Box::new(SelectTool::new()), 
-            _ => { self.active_tool = Box::new(BrushTool::new()); }
+            "ToolBrush" => self.active_tool = Box::new(BrushTool::new()), "ToolPencil" => self.active_tool = Box::new(PencilTool::new()), 
+            "ToolEraser" => self.active_tool = Box::new(EraserTool::new()), "ToolCutter" => self.active_tool = Box::new(CutterTool::new()), 
+            "ToolSelect" => self.active_tool = Box::new(SelectTool::new()), _ => { self.active_tool = Box::new(BrushTool::new()); }
         }
-        let target_cursor = self.active_tool.get_cursor(); self.cursor_manager.apply(target_cursor);
-        self.render();
+        let target_cursor = self.active_tool.get_cursor(); self.cursor_manager.apply(target_cursor); self.render();
     }
 
     #[wasm_bindgen]
@@ -128,8 +118,7 @@ impl AnimLabEngine {
     pub fn hover(&mut self, x: f32, y: f32, constrain: bool, center: bool) -> Result<(), JsValue> {
         let tool = &mut self.active_tool; let scene = &mut self.scene;
         let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| { tool.on_pointer_hover(x, y, constrain, center, scene); })).unwrap_or_else(|_| {});
-        self.render();
-        Ok(())
+        self.render(); Ok(())
     }
 
     #[wasm_bindgen] 
@@ -137,18 +126,14 @@ impl AnimLabEngine {
         self.scene.ensure_drawing_exists(&mut self.id_allocator);
         let settings = settings::get_settings(); 
         self.active_tool.on_pointer_down(x, y, pressure, constrain, center, settings, &mut self.scene, &mut self.id_allocator); 
-        let cursor = self.active_tool.get_cursor(); self.cursor_manager.apply(cursor); 
-        self.render();
-        Ok(()) 
+        let cursor = self.active_tool.get_cursor(); self.cursor_manager.apply(cursor); self.render(); Ok(()) 
     }
     
     #[wasm_bindgen] 
     pub fn push_point(&mut self, x: f32, y: f32, pressure: f32, constrain: bool, center: bool) -> Result<(), JsValue> {
         let canvas_w = self.canvas_width; let canvas_h = self.canvas_height; let tool = &mut self.active_tool; let scene = &mut self.scene;
         let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| { tool.on_pointer_move(x, y, pressure, constrain, center, scene, canvas_w, canvas_h); }));
-        let cursor = self.active_tool.get_cursor(); self.cursor_manager.apply(cursor); 
-        self.render();
-        Ok(())
+        let cursor = self.active_tool.get_cursor(); self.cursor_manager.apply(cursor); self.render(); Ok(())
     }
     
     #[wasm_bindgen] 
@@ -156,9 +141,7 @@ impl AnimLabEngine {
         let canvas_w = self.canvas_width; let canvas_h = self.canvas_height; let tool = &mut self.active_tool; let allocator = &mut self.id_allocator; let scene = &mut self.scene;
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| { tool.on_pointer_up(allocator, canvas_w, canvas_h, scene) }));
         if let Ok(Some(command)) = result { self.history.push_and_execute(command, &mut self.scene, canvas_w, canvas_h); }
-        let cursor = self.active_tool.get_cursor(); self.cursor_manager.apply(cursor); 
-        self.render();
-        Ok(())
+        let cursor = self.active_tool.get_cursor(); self.cursor_manager.apply(cursor); self.render(); Ok(())
     }
 
     #[wasm_bindgen]
@@ -167,64 +150,48 @@ impl AnimLabEngine {
         if let Some(renderer) = &mut self.renderer { renderer.render(&self.scene, self.active_tool.as_ref(), self.canvas_width, self.canvas_height); }
     }
 
-    // --- DELEGATED SELECTION API ---
-
     #[wasm_bindgen] pub fn has_selection(&self) -> bool { !self.scene.selected_strokes.is_empty() }
-    
-    #[wasm_bindgen]
-    pub fn select_all(&mut self) {
-        operations::selection::select_all(&mut self.scene);
-        self.render();
-    }
-
-    #[wasm_bindgen]
-    pub fn flip_selection(&mut self, flip_h: bool, flip_v: bool) -> Result<(), JsValue> {
-        operations::selection::flip_selection(&mut self.scene, &mut self.history, self.canvas_width, self.canvas_height, flip_h, flip_v);
-        self.render();
-        Ok(())
-    }
-
-    #[wasm_bindgen]
-    pub fn delete_selection(&mut self) -> Result<(), JsValue> {
-        operations::selection::delete_selection(&mut self.scene, &mut self.history, self.canvas_width, self.canvas_height);
-        self.render();
-        Ok(())
-    }
-
-    #[wasm_bindgen]
-    pub fn copy_selection(&mut self) {
-        operations::selection::copy_selection(&self.scene, &mut self.clipboard);
-    }
-
+    #[wasm_bindgen] pub fn select_all(&mut self) { operations::selection::select_all(&mut self.scene); self.render(); }
+    #[wasm_bindgen] pub fn flip_selection(&mut self, flip_h: bool, flip_v: bool) -> Result<(), JsValue> { operations::selection::flip_selection(&mut self.scene, &mut self.history, self.canvas_width, self.canvas_height, flip_h, flip_v); self.render(); Ok(()) }
+    #[wasm_bindgen] pub fn delete_selection(&mut self) -> Result<(), JsValue> { operations::selection::delete_selection(&mut self.scene, &mut self.history, self.canvas_width, self.canvas_height); self.render(); Ok(()) }
+    #[wasm_bindgen] pub fn copy_selection(&mut self) { operations::selection::copy_selection(&self.scene, &mut self.clipboard); }
     #[wasm_bindgen] pub fn cut_selection(&mut self) { self.copy_selection(); let _ = self.delete_selection(); }
+    #[wasm_bindgen] pub fn paste_clipboard(&mut self) -> Result<(), JsValue> { operations::selection::paste_clipboard(&mut self.scene, &mut self.history, &mut self.id_allocator, &self.clipboard, self.canvas_width, self.canvas_height); self.render(); Ok(()) }
+    #[wasm_bindgen] pub fn group_selection(&mut self) {} #[wasm_bindgen] pub fn ungroup_selection(&mut self) {}
+
+    #[wasm_bindgen] pub fn set_active_art_layer(&mut self, layer_index: u8) { operations::layers::set_active_art_layer(&mut self.scene, layer_index); self.render(); }
+    #[wasm_bindgen] pub fn set_layer_opacity(&mut self, element_id: u64, opacity: f32) { operations::layers::set_opacity(&mut self.scene, element_id, opacity); self.render(); }
+    #[wasm_bindgen] pub fn set_layer_visibility(&mut self, element_id: u64, is_visible: bool) { operations::layers::set_visibility(&mut self.scene, element_id, is_visible); self.render(); }
 
     #[wasm_bindgen]
-    pub fn paste_clipboard(&mut self) -> Result<(), JsValue> {
-        operations::selection::paste_clipboard(&mut self.scene, &mut self.history, &mut self.id_allocator, &self.clipboard, self.canvas_width, self.canvas_height);
-        self.render();
-        Ok(())
-    }
-
-    #[wasm_bindgen] pub fn group_selection(&mut self) {}
-    #[wasm_bindgen] pub fn ungroup_selection(&mut self) {}
-
-    // --- DELEGATED LAYER API ---
+    pub fn set_current_frame(&mut self, frame: u32) { self.scene.current_frame = frame; self.render(); }
 
     #[wasm_bindgen]
-    pub fn set_active_art_layer(&mut self, layer_index: u8) {
-        operations::layers::set_active_art_layer(&mut self.scene, layer_index);
-        self.render();
-    }
+    pub fn set_exposure(&mut self, element_id: u64, start_frame: u32, duration: u32, drawing_id: u64) { operations::exposure::set_exposure(&mut self.scene, element_id, start_frame, duration, drawing_id); self.render(); }
 
     #[wasm_bindgen]
-    pub fn set_layer_opacity(&mut self, element_id: u64, opacity: f32) {
-        operations::layers::set_opacity(&mut self.scene, element_id, opacity);
-        self.render(); 
-    }
+    pub fn extend_exposure(&mut self, element_id: u64, start_frame: u32, new_duration: u32) { operations::exposure::extend_exposure(&mut self.scene, element_id, start_frame, new_duration); self.render(); }
 
     #[wasm_bindgen]
-    pub fn set_layer_visibility(&mut self, element_id: u64, is_visible: bool) {
-        operations::layers::set_visibility(&mut self.scene, element_id, is_visible);
-        self.render();
+    pub fn split_exposure(&mut self, element_id: u64, cut_frame: u32) { operations::exposure::split_exposure(&mut self.scene, element_id, cut_frame); self.render(); }
+
+    #[wasm_bindgen]
+    pub fn clear_exposure(&mut self, element_id: u64, start_frame: u32, duration: u32) { operations::exposure::clear_exposure(&mut self.scene, element_id, start_frame, duration); self.render(); }
+
+    // AAA UI SYNC: Generates a JSON map of the active intervals to feed the React Timeline
+    #[wasm_bindgen]
+    pub fn get_timeline_state(&self) -> String {
+        let mut elements_json = Vec::new();
+        for el_id in self.scene.z_stack.iter().rev() {
+            if let Some(el) = self.scene.elements.get(el_id) {
+                let mut blocks_json = Vec::new();
+                for (_, block) in &el.exposures {
+                    blocks_json.push(format!(r#"{{"start": {}, "duration": {}, "id": {}}}"#, block.start_frame, block.duration, block.drawing_id));
+                }
+                let name = el.name.replace("\"", "\\\"");
+                elements_json.push(format!(r#"{{"id": {}, "name": "{}", "blocks": [{}]}}"#, el_id, name, blocks_json.join(",")));
+            }
+        }
+        format!("[{}]", elements_json.join(","))
     }
 }

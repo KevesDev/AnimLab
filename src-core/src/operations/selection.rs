@@ -6,25 +6,19 @@ pub fn select_all(scene: &mut SceneManager) {
     scene.selected_strokes.clear();
     let ids: Vec<_> = if let Some((_, layer)) = scene.get_active_art_layer() { 
         layer.vector_elements.keys().copied().collect() 
-    } else { 
-        Vec::new() 
-    };
+    } else { Vec::new() };
     for id in ids { scene.selected_strokes.insert(id); }
 }
 
 pub fn flip_selection(scene: &mut SceneManager, history: &mut CommandHistory, canvas_width: f32, canvas_height: f32, flip_h: bool, flip_v: bool) {
     if scene.selected_strokes.is_empty() { return; }
     let element_id = scene.active_element_id.unwrap_or(1);
-    let drawing_id = scene.elements.get(&element_id).unwrap().exposures.get(&scene.current_frame).copied().unwrap_or(1);
+    let drawing_id = scene.elements.get(&element_id).unwrap().get_exposure_id(scene.current_frame).unwrap_or(1);
 
     if let Some(aabb) = scene.get_selection_aabb() {
-        let cx = aabb.min_x + (aabb.max_x - aabb.min_x) / 2.0; 
-        let cy = aabb.min_y + (aabb.max_y - aabb.min_y) / 2.0;
-        let sx = if flip_h { -1.0 } else { 1.0 }; 
-        let sy = if flip_v { -1.0 } else { 1.0 };
-        let mut old_elements = Vec::new(); 
-        let mut new_elements = Vec::new();
-
+        let cx = aabb.min_x + (aabb.max_x - aabb.min_x) / 2.0; let cy = aabb.min_y + (aabb.max_y - aabb.min_y) / 2.0;
+        let sx = if flip_h { -1.0 } else { 1.0 }; let sy = if flip_v { -1.0 } else { 1.0 };
+        let mut old_elements = Vec::new(); let mut new_elements = Vec::new();
         let selected: Vec<_> = scene.selected_strokes.iter().copied().collect();
 
         if let Some((_, layer)) = scene.get_active_art_layer_mut() {
@@ -48,14 +42,12 @@ pub fn flip_selection(scene: &mut SceneManager, history: &mut CommandHistory, ca
 pub fn delete_selection(scene: &mut SceneManager, history: &mut CommandHistory, canvas_width: f32, canvas_height: f32) {
     if scene.selected_strokes.is_empty() { return; }
     let element_id = scene.active_element_id.unwrap_or(1);
-    let drawing_id = scene.elements.get(&element_id).unwrap().exposures.get(&scene.current_frame).copied().unwrap_or(1);
+    let drawing_id = scene.elements.get(&element_id).unwrap().get_exposure_id(scene.current_frame).unwrap_or(1);
     let mut severed_fragments = Vec::new();
     
     let selected: Vec<_> = scene.selected_strokes.iter().copied().collect();
     if let Some((_, layer)) = scene.get_active_art_layer() {
-        for id in &selected { 
-            if let Some(el) = layer.vector_elements.get(id) { severed_fragments.push((*id, el.clone())); } 
-        }
+        for id in &selected { if let Some(el) = layer.vector_elements.get(id) { severed_fragments.push((*id, el.clone())); } }
     }
     
     for (stroke_id, original_element) in severed_fragments {
@@ -69,9 +61,7 @@ pub fn copy_selection(scene: &SceneManager, clipboard: &mut Vec<VectorElement>) 
     clipboard.clear();
     let selected: Vec<_> = scene.selected_strokes.iter().copied().collect();
     if let Some((_, layer)) = scene.get_active_art_layer() {
-        for id in &selected { 
-            if let Some(el) = layer.vector_elements.get(id) { clipboard.push(el.clone()); } 
-        }
+        for id in &selected { if let Some(el) = layer.vector_elements.get(id) { clipboard.push(el.clone()); } }
     }
 }
 
@@ -80,7 +70,7 @@ pub fn paste_clipboard(scene: &mut SceneManager, history: &mut CommandHistory, a
     scene.ensure_drawing_exists(allocator);
     
     let element_id = scene.active_element_id.unwrap_or(1);
-    let drawing_id = scene.elements.get(&element_id).unwrap().exposures.get(&scene.current_frame).copied().unwrap_or(1);
+    let drawing_id = scene.elements.get(&element_id).unwrap().get_exposure_id(scene.current_frame).unwrap_or(1);
     let mut commands: Vec<Box<dyn crate::command::Command>> = Vec::new();
     
     scene.selected_strokes.clear();

@@ -15,6 +15,12 @@ export const CanvasViewport: React.FC = () => {
         
         let attached = false;
         let isAttaching = false;
+        let animationFrameId: number;
+
+        const renderLoop = () => {
+            engineInstance.render();
+            animationFrameId = requestAnimationFrame(renderLoop);
+        };
 
         const resizeObserver = new ResizeObserver((entries) => {
             for (let entry of entries) {
@@ -27,13 +33,12 @@ export const CanvasViewport: React.FC = () => {
 
                 if (!attached && !isAttaching) {
                     isAttaching = true;
-                    
                     engineInstance.attach_canvas(canvas, canvas.width, canvas.height)
                         .then(() => {
-                            engineInstance.render();
                             inputManager.attachCanvas(canvas);
                             attached = true;
                             isAttaching = false;
+                            renderLoop();
                         })
                         .catch((err: any) => {
                             console.error("AnimLab Engine failed to attach:", err);
@@ -41,7 +46,6 @@ export const CanvasViewport: React.FC = () => {
                         });
                 } else if (attached) {
                     engineInstance.resize_surface(canvas.width, canvas.height);
-                    engineInstance.render();
                 }
             }
         });
@@ -51,6 +55,7 @@ export const CanvasViewport: React.FC = () => {
         return () => { 
             resizeObserver.disconnect(); 
             inputManager.detachCanvas(); 
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
         };
     }, [engineInstance]);
 
@@ -59,8 +64,8 @@ export const CanvasViewport: React.FC = () => {
             <canvas 
                 id="animlab-canvas"
                 ref={canvasRef} 
-                // AAA FIX: Added a light 'paper' background color so you can actually see your strokes
-                style={{ width: '100%', height: '100%', cursor: 'crosshair', touchAction: 'none', backgroundColor: '#e5e5e5' }} 
+                // AAA FIX: Removed hardcoded 'cursor' so the Rust backend can govern it
+                style={{ width: '100%', height: '100%', touchAction: 'none', backgroundColor: '#e5e5e5' }} 
             />
         </div>
     );

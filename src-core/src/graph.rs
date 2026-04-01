@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, BTreeMap};
 use crate::geometry::{VectorElement, Point};
 use crate::math::AABB;
 use geo::Contains;
@@ -13,6 +13,14 @@ pub enum BlendMode { Normal, Multiply, Screen, Add }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArtLayerType { Overlay, LineArt, ColorArt, Underlay }
+
+// AAA: The Timeline Node. Stores interval data instead of duplicating frames.
+#[derive(Debug, Clone)]
+pub struct ExposureBlock {
+    pub drawing_id: DrawingId,
+    pub start_frame: FrameNumber,
+    pub duration: u32,
+}
 
 #[derive(Debug, Clone)]
 pub struct ArtLayer { pub vector_elements: HashMap<StrokeId, VectorElement> }
@@ -35,15 +43,31 @@ impl DrawingData {
 #[derive(Debug, Clone)]
 pub struct DrawingElement {
     pub id: ElementId, pub name: String, pub is_visible: bool, pub is_locked: bool, pub opacity: f32, pub blend_mode: BlendMode, pub z_nudge: f32,
-    pub library: HashMap<DrawingId, DrawingData>, pub exposures: HashMap<FrameNumber, DrawingId>,
+    pub library: HashMap<DrawingId, DrawingData>, 
+    pub exposures: BTreeMap<FrameNumber, ExposureBlock>, // AAA: Interval Map
 }
 impl DrawingElement {
-    pub fn new(id: ElementId, name: String) -> Self { Self { id, name, is_visible: true, is_locked: false, opacity: 1.0, blend_mode: BlendMode::Normal, z_nudge: 0.0, library: HashMap::new(), exposures: HashMap::new() } }
+    pub fn new(id: ElementId, name: String) -> Self { 
+        Self { id, name, is_visible: true, is_locked: false, opacity: 1.0, blend_mode: BlendMode::Normal, z_nudge: 0.0, library: HashMap::new(), exposures: BTreeMap::new() } 
+    }
+    
+    // Core Interval Resolution: Finds which block encompasses the requested frame
+    pub fn get_exposure_at(&self, frame: FrameNumber) -> Option<&ExposureBlock> {
+        if let Some((_, block)) = self.exposures.range(..=frame).next_back() {
+            if frame < block.start_frame + block.duration { return Some(block); }
+        }
+        None
+    }
+
+    pub fn get_exposure_id(&self, frame: FrameNumber) -> Option<DrawingId> {
+        self.get_exposure_at(frame).map(|b| b.drawing_id)
+    }
+
     pub fn get_drawing_mut(&mut self, frame: FrameNumber) -> Option<&mut DrawingData> {
-        if let Some(&drawing_id) = self.exposures.get(&frame) { self.library.get_mut(&drawing_id) } else { None }
+        if let Some(drawing_id) = self.get_exposure_id(frame) { self.library.get_mut(&drawing_id) } else { None }
     }
     pub fn get_drawing(&self, frame: FrameNumber) -> Option<&DrawingData> {
-        if let Some(&drawing_id) = self.exposures.get(&frame) { self.library.get(&drawing_id) } else { None }
+        if let Some(drawing_id) = self.get_exposure_id(frame) { self.library.get(&drawing_id) } else { None }
     }
 }
 
@@ -63,10 +87,12 @@ impl SceneManager {
 
     pub fn ensure_drawing_exists(&mut self, allocator: &mut IdAllocator) {
         if let Some(el_id) = self.active_element_id {
+            let current_frame = self.current_frame;
             if let Some(el) = self.elements.get_mut(&el_id) {
-                if !el.exposures.contains_key(&self.current_frame) {
+                if el.get_exposure_at(current_frame).is_none() {
                     let new_draw_id = allocator.generate();
-                    el.library.insert(new_draw_id, DrawingData::new()); el.exposures.insert(self.current_frame, new_draw_id);
+                    el.library.insert(new_draw_id, DrawingData::new()); 
+                    el.exposures.insert(current_frame, ExposureBlock { drawing_id: new_draw_id, start_frame: current_frame, duration: 1 });
                 }
             }
         }
@@ -74,13 +100,13 @@ impl SceneManager {
 
     pub fn get_active_art_layer_mut(&mut self) -> Option<(DrawingId, &mut ArtLayer)> {
         let el_id = self.active_element_id?; let frame = self.current_frame; let art_type = self.active_art_layer;
-        let el = self.elements.get_mut(&el_id)?; let draw_id = *el.exposures.get(&frame)?; let drawing = el.library.get_mut(&draw_id)?;
+        let el = self.elements.get_mut(&el_id)?; let draw_id = el.get_exposure_id(frame)?; let drawing = el.library.get_mut(&draw_id)?;
         Some((draw_id, drawing.get_art_layer_mut(art_type)))
     }
 
     pub fn get_active_art_layer(&self) -> Option<(DrawingId, &ArtLayer)> {
         let el_id = self.active_element_id?; let frame = self.current_frame; let art_type = self.active_art_layer;
-        let el = self.elements.get(&el_id)?; let draw_id = *el.exposures.get(&frame)?; let drawing = el.library.get(&draw_id)?;
+        let el = self.elements.get(&el_id)?; let draw_id = el.get_exposure_id(frame)?; let drawing = el.library.get(&draw_id)?;
         Some((draw_id, drawing.get_art_layer(art_type)))
     }
 

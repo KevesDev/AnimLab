@@ -24,7 +24,6 @@ impl CanvasTool for CutterTool {
     fn get_cursor(&self) -> &'static str { "crosshair" }
 
     fn on_pointer_down(&mut self, x: f32, y: f32, pressure: f32, _constrain: bool, _center: bool, _settings: EngineSettings, scene: &mut SceneManager, _id_allocator: &mut IdAllocator) {
-        // AAA INTEGRITY RESTORED: Dragging behavior check
         if let Some(id) = scene.hit_test(x, y) {
             if scene.selected_strokes.contains(&id) {
                 self.is_dragging = true;
@@ -68,10 +67,11 @@ impl CanvasTool for CutterTool {
     
     fn on_pointer_up(&mut self, id_allocator: &mut IdAllocator, canvas_width: f32, canvas_height: f32, scene: &mut SceneManager) -> Option<Box<dyn Command>> {
         let element_id = scene.active_element_id.unwrap_or(1);
-        let drawing_id = scene.elements.get(&element_id).unwrap().exposures.get(&scene.current_frame).copied().unwrap_or(1);
+        
+        // AAA XSHEET INTEGRATION: Route through the interval tree
+        let drawing_id = scene.elements.get(&element_id).unwrap().get_exposure_id(scene.current_frame).unwrap_or(1);
         let art_layer = scene.active_art_layer;
 
-        // 1. Resolve Dragging
         if self.is_dragging {
             self.is_dragging = false;
             if self.total_dx.abs() > 0.1 || self.total_dy.abs() > 0.1 {
@@ -90,7 +90,6 @@ impl CanvasTool for CutterTool {
             return None;
         }
 
-        // 2. Resolve Lasso Cut
         if self.raw_points.len() < 3 { return None; }
 
         let mut sweep_aabb = AABB::empty();
@@ -99,7 +98,6 @@ impl CanvasTool for CutterTool {
         let mut batch_commands = Vec::new();
         let mut to_cut = Vec::new();
 
-        // AAA INTEGRITY RESTORED: Find all elements intersecting the lasso bounds exactly like your original logic
         if let Some((_, layer)) = scene.get_active_art_layer() {
             for (id, element) in &layer.vector_elements {
                 if element.aabb().intersects(&sweep_aabb) {
@@ -118,7 +116,7 @@ impl CanvasTool for CutterTool {
                 
                 for frag in inside_frags { 
                     let new_id = id_allocator.generate();
-                    newly_selected.push(new_id); // Auto-select the sliced piece
+                    newly_selected.push(new_id);
                     new_fragments_with_ids.push((new_id, frag)); 
                 }
                 for frag in outside_frags { 

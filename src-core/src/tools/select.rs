@@ -116,7 +116,10 @@ impl CanvasTool for SelectTool {
                     }
                     self.state = SelectState::Idle;
                     let element_id = scene.active_element_id.unwrap_or(1);
-                    let drawing_id = scene.elements.get(&element_id).unwrap().exposures.get(&scene.current_frame).copied().unwrap_or(1);
+                    
+                    // AAA XSHEET INTEGRATION: Route through the interval tree
+                    let drawing_id = scene.elements.get(&element_id).unwrap().get_exposure_id(scene.current_frame).unwrap_or(1);
+                    
                     return Some(Box::new(AffineCommand { element_id, drawing_id, art_layer: scene.active_art_layer, old_elements: self.original_elements.clone(), new_elements }));
                 }
             },
