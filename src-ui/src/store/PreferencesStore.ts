@@ -5,7 +5,7 @@ interface BrushSettings { thickness: number; color: [number, number, number, num
 interface Modifiers { constrain: boolean; center: boolean; }
 interface ModifierBindings { constrain: string; center: string; }
 
-export interface TimelineLayer { id: bigint; name: string; }
+export interface TimelineLayer { id: bigint; name: string; isVisible: boolean; isLocked: boolean; }
 export interface TimelineBlock { elementId: bigint; start: number; duration: number; id: bigint; }
 
 export interface GhostState { elementId: bigint; originalStart: number; originalDuration: number; newStart: number; newDuration: number; }
@@ -19,7 +19,9 @@ interface PreferencesState {
     activeArtLayer: number; 
     currentFrame: number; 
     
-    sceneLength: number; // AAA FIX: Dynamic max bounds for virtualization rendering
+    workspacePath: string; 
+    sceneLength: number; 
+    
     timelineLayers: TimelineLayer[];
     timelineBlocks: TimelineBlock[];
     ghostState: GhostState | null;
@@ -34,11 +36,15 @@ interface PreferencesState {
     
     setActiveArtLayer: (layerIndex: number) => void;
     setLayerOpacity: (elementId: number, opacity: number) => void;
-    setLayerVisibility: (elementId: number, isVisible: boolean) => void;
+    
+    toggleLayerVisibility: (id: bigint) => void;
+    toggleLayerLock: (id: bigint) => void;
+    reorderLayer: (id: bigint, newUIIndex: number) => void;
     
     setCurrentFrame: (frame: number) => void; 
     setSelectedLayerId: (id: bigint | null) => void;
     setGhostState: (ghost: GhostState | null) => void;
+    setWorkspacePath: (path: string) => void;
     fetchTimelineState: () => void;
 }
 
@@ -51,7 +57,9 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     activeArtLayer: 1, 
     currentFrame: 1,
     
+    workspacePath: "C:/Users/Default/Documents/AnimLab Workspace",
     sceneLength: 60,
+    
     timelineLayers: [], 
     timelineBlocks: [],
     ghostState: null,
@@ -88,9 +96,18 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
         const engine = get().engineInstance;
         if (engine && typeof engine.set_layer_opacity === 'function') { engine.set_layer_opacity(BigInt(elementId), opacity); }
     },
-    setLayerVisibility: (elementId, isVisible) => {
+
+    toggleLayerVisibility: (id) => {
         const engine = get().engineInstance;
-        if (engine && typeof engine.set_layer_visibility === 'function') { engine.set_layer_visibility(BigInt(elementId), isVisible); }
+        if (engine && typeof engine.toggle_layer_visibility === 'function') { engine.toggle_layer_visibility(BigInt(id)); get().fetchTimelineState(); }
+    },
+    toggleLayerLock: (id) => {
+        const engine = get().engineInstance;
+        if (engine && typeof engine.toggle_layer_lock === 'function') { engine.toggle_layer_lock(BigInt(id)); get().fetchTimelineState(); }
+    },
+    reorderLayer: (id, newUIIndex) => {
+        const engine = get().engineInstance;
+        if (engine && typeof engine.reorder_layer === 'function') { engine.reorder_layer(BigInt(id), newUIIndex); get().fetchTimelineState(); }
     },
     
     setCurrentFrame: (frame) => {
@@ -99,8 +116,17 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
         if (engine && typeof engine.set_current_frame === 'function') { engine.set_current_frame(frame); }
     },
     
-    setSelectedLayerId: (id) => set({ selectedLayerId: id }),
+    // AAA FIX: Explicitly binds UI Layer selection to the Rust drawing engine
+    setSelectedLayerId: (id) => {
+        set({ selectedLayerId: id });
+        const engine = get().engineInstance;
+        if (engine && typeof engine.set_active_element === 'function' && id !== null) {
+            engine.set_active_element(BigInt(id));
+        }
+    },
+    
     setGhostState: (ghost) => set({ ghostState: ghost }),
+    setWorkspacePath: (path) => set({ workspacePath: path }),
 
     fetchTimelineState: () => {
         const engine = get().engineInstance;

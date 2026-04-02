@@ -11,7 +11,7 @@ import { GlobalInputManager } from './engine_bridge/InputManager';
 import { usePreferencesStore } from './store/PreferencesStore';
 import { InputAction } from './store/shortcutStore';
 import { ContextMenu } from './components/ContextMenu';
-import { LayerModals } from './components/LayerModals'; // AAA FIX: Inject global modals
+import { LayerModals } from './components/LayerModals'; // AAA FIX: Inject global Modals
 
 import init, { AnimLabEngine } from 'animlab-core';
 import { MousePointer2, Scissors, Paintbrush, Pencil, Eraser, Layers } from 'lucide-react';
@@ -64,7 +64,16 @@ export const App: React.FC = () => {
                 engine.set_brush_settings(prefs.brush.thickness, prefs.brush.color[0], prefs.brush.color[1], prefs.brush.color[2], prefs.brush.color[3]);
                 prefs.fetchTimelineState();
                 
-                console.info("[App] AnimLab WebAssembly Core securely initialized and injected.");
+                // AAA FIX: Safely attempt to pull native OS directories via Tauri. Fallback gracefully.
+                try {
+                    const { documentDir } = await import('@tauri-apps/api/path');
+                    const defaultPath = await documentDir();
+                    prefs.setWorkspacePath(`${defaultPath}/AnimLab Workspace`);
+                } catch (e) {
+                    console.info("[App] Tauri Native Path API unavailable in current context. Using fallback.");
+                }
+                
+                console.info("[App] AnimLab WebAssembly Core securely initialized.");
                 inputManager.initialize();
             } catch (error) {
                 console.error("[App] FATAL: Failed to initialize WebAssembly core:", error);
@@ -102,7 +111,7 @@ export const App: React.FC = () => {
             </div>
 
             <ContextMenu />
-            <LayerModals />
+            <LayerModals /> 
 
             <style>{`
                 .flexlayout__tabset_header { background: #1c1d20 !important; border-bottom: 1px solid #111 !important; height: 22px !important; }

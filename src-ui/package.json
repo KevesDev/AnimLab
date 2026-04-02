@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.10.1",
     "animlab-core": "file:../src-core/pkg",
     "lucide-react": "^1.7.0",
     "react": "^18.3.1",

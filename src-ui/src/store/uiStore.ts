@@ -12,7 +12,7 @@ interface UIStoreState {
     openContextMenu: (x: number, y: number, hasSelection: boolean) => void;
     closeContextMenu: () => void;
     
-    // AAA FIX: Layer Modal UI Global Hooks
+    // AAA FIX: Layer Modal Global Access
     isAddLayerModalOpen: boolean;
     isDeleteLayerModalOpen: boolean;
     layerToDelete: bigint | null;

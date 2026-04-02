@@ -83,7 +83,6 @@ impl Command for BatchCommand {
     fn undo(&self, scene: &mut SceneManager, cw: f32, ch: f32) { for cmd in self.commands.iter().rev() { cmd.undo(scene, cw, ch); } }
 }
 
-// AAA FIX: Safely manages adding and deleting whole layers, natively hooking into the Undo/Redo stack.
 pub struct LayerCommand {
     pub element_id: ElementId, pub element: crate::graph::DrawingElement, pub is_add: bool,
 }
@@ -104,6 +103,39 @@ impl Command for LayerCommand {
         } else {
             scene.elements.insert(self.element_id, self.element.clone());
             if !scene.z_stack.contains(&self.element_id) { scene.z_stack.push(self.element_id); }
+        }
+    }
+}
+
+pub struct ToggleLayerStateCommand { pub element_id: ElementId, pub toggle_visibility: bool }
+impl Command for ToggleLayerStateCommand {
+    fn execute(&self, scene: &mut SceneManager, _: f32, _: f32) {
+        if let Some(el) = scene.elements.get_mut(&self.element_id) {
+            if self.toggle_visibility { el.is_visible = !el.is_visible; } else { el.is_locked = !el.is_locked; }
+        }
+    }
+    fn undo(&self, scene: &mut SceneManager, _: f32, _: f32) {
+        if let Some(el) = scene.elements.get_mut(&self.element_id) {
+            if self.toggle_visibility { el.is_visible = !el.is_visible; } else { el.is_locked = !el.is_locked; }
+        }
+    }
+}
+
+pub struct ReorderLayerCommand { pub element_id: ElementId, pub old_index: usize, pub new_index: usize }
+impl Command for ReorderLayerCommand {
+    fn execute(&self, scene: &mut SceneManager, _: f32, _: f32) {
+        if self.old_index < scene.z_stack.len() {
+            let id = scene.z_stack.remove(self.old_index);
+            let safe_new = self.new_index.min(scene.z_stack.len());
+            scene.z_stack.insert(safe_new, id);
+        }
+    }
+    fn undo(&self, scene: &mut SceneManager, _: f32, _: f32) {
+        let safe_new = self.new_index.min(scene.z_stack.len() - 1);
+        if safe_new < scene.z_stack.len() {
+            let id = scene.z_stack.remove(safe_new);
+            let safe_old = self.old_index.min(scene.z_stack.len());
+            scene.z_stack.insert(safe_old, id);
         }
     }
 }
