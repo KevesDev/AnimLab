@@ -11,6 +11,7 @@ import { GlobalInputManager } from './engine_bridge/InputManager';
 import { usePreferencesStore } from './store/PreferencesStore';
 import { InputAction } from './store/shortcutStore';
 import { ContextMenu } from './components/ContextMenu';
+import { LayerModals } from './components/LayerModals'; // AAA FIX: Inject global modals
 
 import init, { AnimLabEngine } from 'animlab-core';
 import { MousePointer2, Scissors, Paintbrush, Pencil, Eraser, Layers } from 'lucide-react';
@@ -61,8 +62,6 @@ export const App: React.FC = () => {
                 
                 prefs.setEngineInstance(engine);
                 engine.set_brush_settings(prefs.brush.thickness, prefs.brush.color[0], prefs.brush.color[1], prefs.brush.color[2], prefs.brush.color[3]);
-                
-                // AAA FIX: Query Rust to render the timeline UI instantly on boot
                 prefs.fetchTimelineState();
                 
                 console.info("[App] AnimLab WebAssembly Core securely initialized and injected.");
@@ -103,6 +102,7 @@ export const App: React.FC = () => {
             </div>
 
             <ContextMenu />
+            <LayerModals />
 
             <style>{`
                 .flexlayout__tabset_header { background: #1c1d20 !important; border-bottom: 1px solid #111 !important; height: 22px !important; }

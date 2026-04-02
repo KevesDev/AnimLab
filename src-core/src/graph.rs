@@ -66,6 +66,7 @@ impl DrawingElement {
     pub fn get_drawing_mut(&mut self, frame: FrameNumber) -> Option<&mut DrawingData> {
         if let Some(drawing_id) = self.get_exposure_id(frame) { self.library.get_mut(&drawing_id) } else { None }
     }
+    
     pub fn get_drawing(&self, frame: FrameNumber) -> Option<&DrawingData> {
         if let Some(drawing_id) = self.get_exposure_id(frame) { self.library.get(&drawing_id) } else { None }
     }
@@ -199,5 +200,17 @@ impl SceneManager {
             }
         }
         elements
+    }
+
+    // AAA FIX: Dynamically calculate the highest frame across all layers. Max 60 guarantees the timeline doesn't collapse.
+    pub fn get_scene_length(&self) -> u32 {
+        let mut max_frame = 60;
+        for el in self.elements.values() {
+            if let Some((&k, block)) = el.exposures.last_key_value() {
+                let end = k + block.duration - 1;
+                if end > max_frame { max_frame = end; }
+            }
+        }
+        max_frame
     }
 }

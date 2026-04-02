@@ -83,6 +83,31 @@ impl Command for BatchCommand {
     fn undo(&self, scene: &mut SceneManager, cw: f32, ch: f32) { for cmd in self.commands.iter().rev() { cmd.undo(scene, cw, ch); } }
 }
 
+// AAA FIX: Safely manages adding and deleting whole layers, natively hooking into the Undo/Redo stack.
+pub struct LayerCommand {
+    pub element_id: ElementId, pub element: crate::graph::DrawingElement, pub is_add: bool,
+}
+impl Command for LayerCommand {
+    fn execute(&self, scene: &mut SceneManager, _: f32, _: f32) {
+        if self.is_add {
+            scene.elements.insert(self.element_id, self.element.clone());
+            if !scene.z_stack.contains(&self.element_id) { scene.z_stack.push(self.element_id); }
+        } else {
+            scene.elements.remove(&self.element_id);
+            scene.z_stack.retain(|&id| id != self.element_id);
+        }
+    }
+    fn undo(&self, scene: &mut SceneManager, _: f32, _: f32) {
+        if self.is_add {
+            scene.elements.remove(&self.element_id);
+            scene.z_stack.retain(|&id| id != self.element_id);
+        } else {
+            scene.elements.insert(self.element_id, self.element.clone());
+            if !scene.z_stack.contains(&self.element_id) { scene.z_stack.push(self.element_id); }
+        }
+    }
+}
+
 pub struct CommandHistory {
     undo_stack: Vec<Box<dyn Command>>, redo_stack: Vec<Box<dyn Command>>,
 }

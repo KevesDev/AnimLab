@@ -62,25 +62,17 @@ impl AnimLabEngine {
         let mut scene = SceneManager::new();
         let mut id_allocator = IdAllocator::new();
         
-        let layer_names = vec!["Color Art", "Clean Line Art", "Rough Animation"];
-        let mut active_id = None;
-
-        for name in layer_names {
-            let el_id = id_allocator.generate();
-            let mut el = DrawingElement::new(el_id, name.to_string());
-            
-            if name == "Rough Animation" {
-                let draw_id = id_allocator.generate();
-                el.library.insert(draw_id, DrawingData::new());
-                el.exposures.insert(1, ExposureBlock { drawing_id: draw_id, start_frame: 1, duration: 1 });
-                active_id = Some(el_id);
-            }
-            
-            scene.elements.insert(el_id, el);
-            scene.z_stack.push(el_id);
-        }
-
-        scene.active_element_id = active_id;
+        // AAA FIX: Start with a single, clean 'Drawing' layer (No hardcoded placeholders)
+        let el_id = id_allocator.generate();
+        let mut el = DrawingElement::new(el_id, "Drawing".to_string());
+        
+        let draw_id = id_allocator.generate();
+        el.library.insert(draw_id, DrawingData::new());
+        el.exposures.insert(1, ExposureBlock { drawing_id: draw_id, start_frame: 1, duration: 1 });
+        
+        scene.elements.insert(el_id, el);
+        scene.z_stack.push(el_id);
+        scene.active_element_id = Some(el_id);
 
         Ok(AnimLabEngine {
             is_ready: true, canvas_width: 0.0, canvas_height: 0.0, renderer: None,
@@ -133,17 +125,48 @@ impl AnimLabEngine {
     #[wasm_bindgen] pub fn set_layer_opacity(&mut self, element_id: u64, opacity: f32) { operations::layers::set_opacity(&mut self.scene, element_id, opacity); self.render(); }
     #[wasm_bindgen] pub fn set_layer_visibility(&mut self, element_id: u64, is_visible: bool) { operations::layers::set_visibility(&mut self.scene, element_id, is_visible); self.render(); }
 
-#[wasm_bindgen] pub fn set_current_frame(&mut self, frame: u32) { self.scene.current_frame = frame; self.render(); }
+    #[wasm_bindgen] pub fn set_current_frame(&mut self, frame: u32) { self.scene.current_frame = frame; self.render(); }
     #[wasm_bindgen] pub fn set_exposure(&mut self, element_id: u64, start_frame: u32, duration: u32, drawing_id: u64) { operations::exposure::set_exposure(&mut self.scene, element_id, start_frame, duration, drawing_id); self.render(); }
     #[wasm_bindgen] pub fn split_exposure(&mut self, element_id: u64, cut_frame: u32) { operations::exposure::split_exposure(&mut self.scene, element_id, cut_frame); self.render(); }
     #[wasm_bindgen] pub fn clear_exposure(&mut self, element_id: u64, start_frame: u32, duration: u32) { operations::exposure::clear_exposure(&mut self.scene, element_id, start_frame, duration); self.render(); }
+    #[wasm_bindgen] pub fn update_exposure(&mut self, element_id: u64, old_start: u32, new_start: u32, new_duration: u32) { operations::exposure::update_exposure(&mut self.scene, element_id, old_start, new_start, new_duration); self.render(); }
+
+    // AAA FIX: WASM bindings for the Wizard commands and dynamic lengths
+    #[wasm_bindgen] pub fn get_scene_length(&self) -> u32 { self.scene.get_scene_length() }
     
-    // AAA FIX: Expose universal bounds update
-    #[wasm_bindgen] pub fn update_exposure(&mut self, element_id: u64, old_start: u32, new_start: u32, new_duration: u32) { 
-        operations::exposure::update_exposure(&mut self.scene, element_id, old_start, new_start, new_duration); 
-        self.render(); 
+    #[wasm_bindgen]
+    pub fn add_drawing_layer(&mut self, name: &str, init_mode: u8) {
+        if self.scene.z_stack.len() >= 100 { return; } // Strict hard cap
+        let el_id = self.id_allocator.generate();
+        let mut el = DrawingElement::new(el_id, name.to_string());
+        
+        let scene_length = self.scene.get_scene_length();
+        if init_mode == 1 || init_mode == 2 {
+            let draw_id = self.id_allocator.generate();
+            el.library.insert(draw_id, DrawingData::new());
+            let duration = if init_mode == 2 { scene_length } else { 1 };
+            let start_frame = if init_mode == 2 { 1 } else { self.scene.current_frame };
+            el.exposures.insert(start_frame, ExposureBlock { drawing_id: draw_id, start_frame, duration });
+        }
+        
+        let cmd = Box::new(crate::command::LayerCommand { element_id: el_id, element: el, is_add: true });
+        self.history.push_and_execute(cmd, &mut self.scene, self.canvas_width, self.canvas_height);
+        self.scene.active_element_id = Some(el_id);
+        self.render();
     }
-    
+
+    #[wasm_bindgen]
+    pub fn delete_drawing_layer(&mut self, element_id: u64) {
+        if let Some(el) = self.scene.elements.get(&element_id) {
+            let cmd = Box::new(crate::command::LayerCommand { element_id, element: el.clone(), is_add: false });
+            self.history.push_and_execute(cmd, &mut self.scene, self.canvas_width, self.canvas_height);
+            if self.scene.active_element_id == Some(element_id) {
+                self.scene.active_element_id = self.scene.z_stack.last().copied();
+            }
+            self.render();
+        }
+    }
+
     #[wasm_bindgen]
     pub fn get_timeline_layers(&self) -> String {
         let mut layers_json = Vec::new();

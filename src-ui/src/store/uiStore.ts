@@ -11,6 +11,15 @@ interface UIStoreState {
     contextMenu: ContextMenuState;
     openContextMenu: (x: number, y: number, hasSelection: boolean) => void;
     closeContextMenu: () => void;
+    
+    // AAA FIX: Layer Modal UI Global Hooks
+    isAddLayerModalOpen: boolean;
+    isDeleteLayerModalOpen: boolean;
+    layerToDelete: bigint | null;
+    
+    setAddLayerModalOpen: (isOpen: boolean) => void;
+    openDeleteLayerModal: (layerId: bigint) => void;
+    closeDeleteLayerModal: () => void;
 }
 
 export const useUIStore = create<UIStoreState>((set) => ({
@@ -23,5 +32,13 @@ export const useUIStore = create<UIStoreState>((set) => ({
     closeContextMenu: () => set((state) => {
         if (!state.contextMenu.isOpen) return state;
         return { contextMenu: { ...state.contextMenu, isOpen: false } };
-    })
+    }),
+
+    isAddLayerModalOpen: false,
+    isDeleteLayerModalOpen: false,
+    layerToDelete: null,
+    
+    setAddLayerModalOpen: (isOpen) => set({ isAddLayerModalOpen: isOpen }),
+    openDeleteLayerModal: (layerId) => set({ isDeleteLayerModalOpen: true, layerToDelete: layerId }),
+    closeDeleteLayerModal: () => set({ isDeleteLayerModalOpen: false, layerToDelete: null }),
 }));

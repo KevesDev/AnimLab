@@ -8,7 +8,6 @@ interface ModifierBindings { constrain: string; center: string; }
 export interface TimelineLayer { id: bigint; name: string; }
 export interface TimelineBlock { elementId: bigint; start: number; duration: number; id: bigint; }
 
-// AAA FIX: Upgraded Ghost State handles both Start Frame and Duration changes simultaneously
 export interface GhostState { elementId: bigint; originalStart: number; originalDuration: number; newStart: number; newDuration: number; }
 
 interface PreferencesState {
@@ -20,10 +19,11 @@ interface PreferencesState {
     activeArtLayer: number; 
     currentFrame: number; 
     
+    sceneLength: number; // AAA FIX: Dynamic max bounds for virtualization rendering
     timelineLayers: TimelineLayer[];
     timelineBlocks: TimelineBlock[];
     ghostState: GhostState | null;
-    selectedLayerId: bigint | null; // AAA FIX: Centralized Layer Selection
+    selectedLayerId: bigint | null; 
 
     setEngineInstance: (engine: any) => void;
     setActiveTool: (tool: InputAction) => void;
@@ -50,6 +50,8 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     modifierBindings: { constrain: 'Shift', center: 'Alt' },
     activeArtLayer: 1, 
     currentFrame: 1,
+    
+    sceneLength: 60,
     timelineLayers: [], 
     timelineBlocks: [],
     ghostState: null,
@@ -120,7 +122,9 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
                         blocks.push({ elementId, start, duration, id });
                     }
                 }
-                set({ timelineLayers: layersData, timelineBlocks: blocks });
+                
+                const sceneLength = engine.get_scene_length();
+                set({ timelineLayers: layersData, timelineBlocks: blocks, sceneLength });
             } catch (e) {
                 console.error("[PreferencesStore] Failed to map timeline state from WASM", e);
             }
